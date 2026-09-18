@@ -44,6 +44,12 @@ class DashcamRecorder(
         /** 1セグメントの録画が正常に完了して保存されたときに呼ばれる */
         fun onSegmentSaved(file: File, durationMs: Long)
 
+        /**
+         * 衝撃検知等により保護対象となったセグメントが、保護フォルダへの
+         * 移動を完了したときに呼ばれる(onSegmentSavedの代わりに呼ばれる)
+         */
+        fun onProtectedSegmentSaved(file: File, durationMs: Long)
+
         /** 録画中にエラーが発生したときに呼ばれる(ストレージ不足等) */
         fun onRecordingError(error: Throwable)
 
@@ -57,6 +63,9 @@ class DashcamRecorder(
         // セグメント分割間隔(ミリ秒)。仕様書: 1〜3分単位でファイル分割
         const val SEGMENT_DURATION_MS = 2 * 60 * 1000L // 2分
 
+        // 保護対象ファイルの保存先サブフォルダ名(outputDirの親配下に作成)
+        private const val PROTECTED_DIR_NAME = "dashcam_protected"
+
         private val FILENAME_FORMAT = SimpleDateFormat("yyyy-MM-dd_HHmmss", Locale.JAPAN)
     }
 
@@ -65,6 +74,20 @@ class DashcamRecorder(
     private var currentRecording: Recording? = null
     private var currentSegmentFile: File? = null
     private var segmentStartTimeMs: Long = 0L
+
+    // 直前に完了したセグメント(衝撃検知が発生した瞬間の「1つ前」を保護するために保持)
+    private var lastCompletedSegmentFile: File? = null
+
+    // 現在録画中のセグメントが保護対象としてマークされているかどうか
+    @Volatile
+    private var pendingProtectionForCurrentSegment = false
+
+    // 保護処理の状態を守るためのロック(複数スレッドからの呼び出しに対応)
+    private val protectionLock = Any()
+
+    private val protectedDir: File by lazy {
+        File(outputDir.parentFile ?: outputDir, PROTECTED_DIR_NAME)
+    }
 
     private val segmentHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var segmentRunnable: Runnable? = null
@@ -152,17 +175,52 @@ class DashcamRecorder(
     }
 
     /**
-     * 現在録画中のセグメントを「保護対象」として即座に確定する。
-     * 衝撃検知(Gセンサー)や手動録画ボタンから呼び出す想定。
-     * 実際の前後バッファの保護ロジック(protected フォルダへの移動)は
-     * onSegmentSaved コールバック側 or 呼び出し元で行う。
+     * 現在録画中のセグメントと、直前に完了したセグメントの両方を
+     * 「保護対象」としてマークする。衝撃検知(Gセンサー)や手動録画ボタンから
+     * 呼び出す想定。
+     *
+     * - 直前の完了済みセグメントは即座に保護フォルダへ移動する
+     * - 現在録画中のセグメントは、録画完了(Finalize)時に保護フォルダへ移動する
+     *   (セグメント境界をまたぐイベントでも前後を録り逃さないための設計)
      */
     fun markCurrentSegmentAsProtected() {
-        currentSegmentFile?.let {
-            Log.i(TAG, "現在のセグメントを保護対象としてマーク: ${it.name}")
-            // 実装メモ: ここでファイルパスをイベントキューに積んでおき、
-            // セグメント確定後に protected フォルダへコピー/移動する設計を推奨。
-            // (セグメント境界をまたぐイベントの場合は前後2セグメントを保護対象にする)
+        synchronized(protectionLock) {
+            pendingProtectionForCurrentSegment = true
+            Log.i(TAG, "現在のセグメントを保護対象としてマーク: ${currentSegmentFile?.name}")
+
+            val previousFile = lastCompletedSegmentFile
+            if (previousFile != null && previousFile.exists()) {
+                cameraExecutor.execute {
+                    val moved = moveToProtectedFolder(previousFile)
+                    if (moved != null) {
+                        Log.i(TAG, "直前のセグメントを保護フォルダへ移動: ${moved.name}")
+                    }
+                }
+                // 同じセグメントを二重に保護対象としないようクリア
+                lastCompletedSegmentFile = null
+            }
+        }
+    }
+
+    /**
+     * ファイルを保護フォルダへ移動する。同一ストレージ内であれば File.renameTo で
+     * 高速に移動できるが、失敗した場合はコピー後に元ファイルを削除するフォールバックを行う。
+     */
+    private fun moveToProtectedFolder(file: File): File? {
+        if (!protectedDir.exists()) protectedDir.mkdirs()
+
+        val destination = File(protectedDir, file.name)
+        return try {
+            if (file.renameTo(destination)) {
+                destination
+            } else {
+                file.copyTo(destination, overwrite = true)
+                file.delete()
+                destination
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "保護フォルダへの移動に失敗しました: ${file.name}", e)
+            null
         }
     }
 
@@ -237,8 +295,23 @@ class DashcamRecorder(
                     val file = currentSegmentFile
                     val duration = System.currentTimeMillis() - segmentStartTimeMs
                     if (file != null) {
-                        Log.i(TAG, "セグメント保存完了: ${file.name} (${duration}ms)")
-                        listener.onSegmentSaved(file, duration)
+                        val shouldProtect = synchronized(protectionLock) {
+                            val flag = pendingProtectionForCurrentSegment
+                            pendingProtectionForCurrentSegment = false
+                            flag
+                        }
+
+                        if (shouldProtect) {
+                            Log.i(TAG, "保護対象セグメントを保存完了: ${file.name} (${duration}ms)")
+                            val moved = moveToProtectedFolder(file)
+                            listener.onProtectedSegmentSaved(moved ?: file, duration)
+                            // 保護フォルダに移動したファイルは通常のループ削除対象では
+                            // ないため、lastCompletedSegmentFile には設定しない
+                        } else {
+                            Log.i(TAG, "セグメント保存完了: ${file.name} (${duration}ms)")
+                            lastCompletedSegmentFile = file
+                            listener.onSegmentSaved(file, duration)
+                        }
                     }
                 }
                 currentRecording = null

@@ -12,10 +12,13 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 import com.example.dashcam.R
+import com.example.dashcam.audio.VoiceAlertManager
 import com.example.dashcam.camera.DashcamRecorder
 import com.example.dashcam.camera.MotionDetector
 import com.example.dashcam.location.DrivingStateDetector
 import com.example.dashcam.sensor.ShockDetector
+import com.example.dashcam.sensor.TailgatingDetector
+import com.example.dashcam.storage.StorageManager
 import java.io.File
 
 /**
@@ -41,9 +44,12 @@ class DashcamForegroundService : LifecycleService() {
 
     private var recorder: DashcamRecorder? = null
     private var shockDetector: ShockDetector? = null
+    private var tailgatingDetector: TailgatingDetector? = null
     private var drivingStateDetector: DrivingStateDetector? = null
     private var motionDetector: MotionDetector? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var storageManager: StorageManager? = null
+    private var voiceAlertManager: VoiceAlertManager? = null
 
     // 駐車監視モード中かどうか(動体検知トリガー録画を有効にするかの判定に使う)
     @Volatile
@@ -52,6 +58,7 @@ class DashcamForegroundService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        voiceAlertManager = VoiceAlertManager(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -67,6 +74,7 @@ class DashcamForegroundService : LifecycleService() {
                 acquireWakeLock()
                 startRecorder()
                 startShockDetector()
+                startTailgatingDetector()
                 startDrivingStateDetector()
             }
         }
@@ -157,6 +165,7 @@ class DashcamForegroundService : LifecycleService() {
                         DrivingStateDetector.State.DRIVING -> {
                             isParkingMode = false
                             shockDetector?.setMode(ShockDetector.Mode.DRIVING)
+                            tailgatingDetector?.setActive(true)
                             motionDetector?.reset()
                             // 常時ループ録画を確実に開始/継続する
                             recorder?.startLoopRecording()
@@ -165,6 +174,7 @@ class DashcamForegroundService : LifecycleService() {
                         DrivingStateDetector.State.PARKING -> {
                             isParkingMode = true
                             shockDetector?.setMode(ShockDetector.Mode.PARKING)
+                            tailgatingDetector?.setActive(false)
                             motionDetector?.reset()
                             // 常時ループ録画は停止。以降はMotionDetectorが
                             // 動きを検知したときだけ録画を開始する
@@ -184,6 +194,33 @@ class DashcamForegroundService : LifecycleService() {
     private fun stopDrivingStateDetector() {
         drivingStateDetector?.stop()
         drivingStateDetector = null
+    }
+
+    private fun startTailgatingDetector() {
+        if (tailgatingDetector != null) {
+            Log.w(TAG, "既にTailgatingDetectorが起動しています")
+            return
+        }
+
+        tailgatingDetector = TailgatingDetector(
+            context = this,
+            listener = object : TailgatingDetector.Listener {
+                override fun onTailgatingSuspected(eventCount: Int) {
+                    Log.i(TAG, "煽り運転の可能性を検知(急ブレーキ${eventCount}回)")
+                    // 衝撃検知と同じ保護ロジックで前後のセグメントを保護対象にする
+                    recorder?.markCurrentSegmentAsProtected()
+                    updateNotification("煽り運転の可能性を検知しました(急ブレーキ${eventCount}回)")
+                }
+            }
+        )
+        tailgatingDetector?.start()
+        // 開始直後は走行状態が未確定なため、DrivingStateDetectorの判定が
+        // 出るまでは非アクティブ。DRIVING判定時に setActive(true) される。
+    }
+
+    private fun stopTailgatingDetector() {
+        tailgatingDetector?.stop()
+        tailgatingDetector = null
     }
 
     private fun startShockDetector() {
@@ -224,6 +261,39 @@ class DashcamForegroundService : LifecycleService() {
         }
 
         val outputDir = File(getExternalFilesDir(null), "dashcam_loop")
+        val protectedDir = File(getExternalFilesDir(null), "dashcam_protected")
+
+        storageManager = StorageManager(
+            loopDir = outputDir,
+            protectedDir = protectedDir,
+            listener = object : StorageManager.Listener {
+                override fun onAutoDeleted(deletedCount: Int, freedBytes: Long) {
+                    Log.i(TAG, "自動削除: ${deletedCount}件 (${freedBytes}bytes解放)")
+                }
+
+                override fun onStorageCritical(freePercent: Int) {
+                    Log.w(TAG, "ストレージ危険域: 空き${freePercent}%。録画を停止します")
+                    recorder?.stopRecording()
+                    updateNotification("空き容量不足のため録画を停止しました(残り${freePercent}%)")
+                    val inCooldown = storageManager?.isCriticalWarningInCooldown() == true
+                    if (!inCooldown) {
+                        voiceAlertManager?.speak(
+                            "ストレージの空き容量が不足しています。録画を停止しました。"
+                        )
+                    }
+                }
+
+                override fun onProtectedFolderOverLimit(currentSizeBytes: Long) {
+                    val inCooldown = storageManager?.isProtectedWarningInCooldown() == true
+                    Log.w(TAG, "保護フォルダが上限を超過: ${currentSizeBytes}bytes")
+                    if (!inCooldown) {
+                        voiceAlertManager?.speak(
+                            "保護された映像の容量が上限に達しています。整理をご検討ください。"
+                        )
+                    }
+                }
+            }
+        )
 
         // 駐車監視モードの動体検知トリガー用アナライザ。
         // DashcamRecorder のカメラバインド時に ImageAnalysis として一緒に組み込まれる。
@@ -255,14 +325,20 @@ class DashcamForegroundService : LifecycleService() {
             listener = object : DashcamRecorder.Listener {
                 override fun onSegmentSaved(file: File, durationMs: Long) {
                     Log.i(TAG, "セグメント保存: ${file.name}")
-                    // TODO: StorageManager にファイル保存完了を通知し、
-                    //       容量チェック・古いファイル削除を行う
+                    storageManager?.checkAndManage()
+                }
+
+                override fun onProtectedSegmentSaved(file: File, durationMs: Long) {
+                    Log.i(TAG, "保護セグメント保存: ${file.name}")
+                    updateNotification("イベント映像を保護フォルダに保存しました")
+                    storageManager?.checkAndManage()
                 }
 
                 override fun onRecordingError(error: Throwable) {
                     Log.e(TAG, "録画エラー", error)
                     updateNotification("録画エラーが発生しました")
-                    // TODO: ストレージ不足エラーの場合は音声警告を再生
+                    // ストレージ不足の可能性もあるため、念のためチェックを走らせる
+                    storageManager?.checkAndManage()
                 }
 
                 override fun onCameraInitFailed(error: Throwable) {
@@ -284,9 +360,13 @@ class DashcamForegroundService : LifecycleService() {
         recorder?.release()
         recorder = null
         motionDetector = null
+        storageManager = null
         stopShockDetector()
+        stopTailgatingDetector()
         stopDrivingStateDetector()
         releaseWakeLock()
+        voiceAlertManager?.release()
+        voiceAlertManager = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -295,9 +375,13 @@ class DashcamForegroundService : LifecycleService() {
         recorder?.release()
         recorder = null
         motionDetector = null
+        storageManager = null
         stopShockDetector()
+        stopTailgatingDetector()
         stopDrivingStateDetector()
         releaseWakeLock()
+        voiceAlertManager?.release()
+        voiceAlertManager = null
         super.onDestroy()
     }
 
