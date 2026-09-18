@@ -3,7 +3,7 @@ package com.example.dashcam.camera
 import android.content.Context
 import android.util.Log
 import androidx.camera.core.CameraSelector
-import androidx.camera.core.ProcessCameraProvider
+import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FileOutputOptions
 import androidx.camera.video.Quality
 import androidx.camera.video.QualitySelector
