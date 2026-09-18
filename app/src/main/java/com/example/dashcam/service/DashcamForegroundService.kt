@@ -13,6 +13,8 @@ import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 import com.example.dashcam.R
 import com.example.dashcam.camera.DashcamRecorder
+import com.example.dashcam.camera.MotionDetector
+import com.example.dashcam.location.DrivingStateDetector
 import com.example.dashcam.sensor.ShockDetector
 import java.io.File
 
@@ -39,7 +41,13 @@ class DashcamForegroundService : LifecycleService() {
 
     private var recorder: DashcamRecorder? = null
     private var shockDetector: ShockDetector? = null
+    private var drivingStateDetector: DrivingStateDetector? = null
+    private var motionDetector: MotionDetector? = null
     private var wakeLock: PowerManager.WakeLock? = null
+
+    // 駐車監視モード中かどうか(動体検知トリガー録画を有効にするかの判定に使う)
+    @Volatile
+    private var isParkingMode = false
 
     override fun onCreate() {
         super.onCreate()
@@ -59,6 +67,7 @@ class DashcamForegroundService : LifecycleService() {
                 acquireWakeLock()
                 startRecorder()
                 startShockDetector()
+                startDrivingStateDetector()
             }
         }
 
@@ -127,6 +136,56 @@ class DashcamForegroundService : LifecycleService() {
         wakeLock = null
     }
 
+    private fun startDrivingStateDetector() {
+        if (drivingStateDetector != null) {
+            Log.w(TAG, "既にDrivingStateDetectorが起動しています")
+            return
+        }
+
+        drivingStateDetector = DrivingStateDetector(
+            context = this,
+            listener = object : DrivingStateDetector.Listener {
+                override fun onStateChanged(
+                    newState: DrivingStateDetector.State,
+                    currentSpeedKmh: Float
+                ) {
+                    Log.i(
+                        TAG,
+                        "走行状態が変化: $newState (${"%.1f".format(currentSpeedKmh)}km/h)"
+                    )
+                    when (newState) {
+                        DrivingStateDetector.State.DRIVING -> {
+                            isParkingMode = false
+                            shockDetector?.setMode(ShockDetector.Mode.DRIVING)
+                            motionDetector?.reset()
+                            // 常時ループ録画を確実に開始/継続する
+                            recorder?.startLoopRecording()
+                            updateNotification("走行中(常時録画中)")
+                        }
+                        DrivingStateDetector.State.PARKING -> {
+                            isParkingMode = true
+                            shockDetector?.setMode(ShockDetector.Mode.PARKING)
+                            motionDetector?.reset()
+                            // 常時ループ録画は停止。以降はMotionDetectorが
+                            // 動きを検知したときだけ録画を開始する
+                            recorder?.stopRecording()
+                            updateNotification("駐車監視中(待機)")
+                        }
+                        DrivingStateDetector.State.UNKNOWN -> {
+                            // 初期状態、判定中は何もしない
+                        }
+                    }
+                }
+            }
+        )
+        drivingStateDetector?.start()
+    }
+
+    private fun stopDrivingStateDetector() {
+        drivingStateDetector?.stop()
+        drivingStateDetector = null
+    }
+
     private fun startShockDetector() {
         if (shockDetector != null) {
             Log.w(TAG, "既にShockDetectorが起動しています")
@@ -138,16 +197,17 @@ class DashcamForegroundService : LifecycleService() {
             listener = object : ShockDetector.Listener {
                 override fun onShockDetected(magnitudeG: Float, mode: ShockDetector.Mode) {
                     Log.i(TAG, "衝撃検知イベント: ${"%.2f".format(magnitudeG)}G (mode=$mode)")
+                    // 駐車監視中で、まだ動体検知による録画が始まっていない場合でも
+                    // 衝撃検知自体をトリガーに録画を開始する(当て逃げ等の瞬間対策)
+                    if (isParkingMode) {
+                        recorder?.startLoopRecording()
+                    }
                     // 現在録画中のセグメントを保護対象としてマーク
                     recorder?.markCurrentSegmentAsProtected()
                     updateNotification("衝撃を検知しました(${"%.1f".format(magnitudeG)}G)")
-                    // TODO: 駐車監視モード(Mode.PARKING)時は、動体検知トリガー録画側の
-                    //       録画開始とも連携させる
                 }
             }
         ).apply {
-            // 現時点では走行中判定は未実装のため、常にDRIVINGモードで起動
-            // TODO: 走行/駐車判定ロジック実装後、setMode()で自動切り替えする
             start()
         }
     }
@@ -165,10 +225,33 @@ class DashcamForegroundService : LifecycleService() {
 
         val outputDir = File(getExternalFilesDir(null), "dashcam_loop")
 
+        // 駐車監視モードの動体検知トリガー用アナライザ。
+        // DashcamRecorder のカメラバインド時に ImageAnalysis として一緒に組み込まれる。
+        motionDetector = MotionDetector(
+            listener = object : MotionDetector.Listener {
+                override fun onMotionDetected() {
+                    Log.i(TAG, "動体検知: 録画を開始します")
+                    if (isParkingMode) {
+                        recorder?.startLoopRecording()
+                        updateNotification("駐車監視中(動きを検知、録画中)")
+                    }
+                }
+
+                override fun onMotionStopped() {
+                    Log.i(TAG, "動体検知: 動きが止まったため録画を停止します")
+                    if (isParkingMode) {
+                        recorder?.stopRecording()
+                        updateNotification("駐車監視中(待機)")
+                    }
+                }
+            }
+        )
+
         recorder = DashcamRecorder(
             context = this,
             lifecycleOwner = this, // LifecycleService自身がLifecycleOwner
             outputDir = outputDir,
+            motionDetector = motionDetector,
             listener = object : DashcamRecorder.Listener {
                 override fun onSegmentSaved(file: File, durationMs: Long) {
                     Log.i(TAG, "セグメント保存: ${file.name}")
@@ -191,6 +274,8 @@ class DashcamForegroundService : LifecycleService() {
         )
 
         recorder?.initialize()
+        // 初期状態は走行中とみなして常時録画を開始する。
+        // DrivingStateDetectorの判定が確定し次第、駐車中であれば自動的に停止される。
         recorder?.startLoopRecording()
         updateNotification("録画中")
     }
@@ -198,7 +283,9 @@ class DashcamForegroundService : LifecycleService() {
     private fun stopRecordingAndSelf() {
         recorder?.release()
         recorder = null
+        motionDetector = null
         stopShockDetector()
+        stopDrivingStateDetector()
         releaseWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -207,7 +294,9 @@ class DashcamForegroundService : LifecycleService() {
     override fun onDestroy() {
         recorder?.release()
         recorder = null
+        motionDetector = null
         stopShockDetector()
+        stopDrivingStateDetector()
         releaseWakeLock()
         super.onDestroy()
     }

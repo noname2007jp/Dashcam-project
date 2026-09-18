@@ -2,7 +2,9 @@ package com.example.dashcam.camera
 
 import android.content.Context
 import android.util.Log
+import android.util.Size
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FileOutputOptions
 import androidx.camera.video.Quality
@@ -28,12 +30,15 @@ import java.util.concurrent.Executors
  * - 常時ループ録画: SEGMENT_DURATION_MS ごとに録画ファイルを分割
  * - セグメント保存後にコールバックで通知し、ストレージ管理(古いファイル削除)は
  *   呼び出し側(StorageManager 等)に委譲する
+ * - motionDetector を渡した場合、VideoCapture と同時に ImageAnalysis も
+ *   バインドし、駐車監視モードの動体検知フレームを供給する
  */
 class DashcamRecorder(
     private val context: Context,
     private val lifecycleOwner: LifecycleOwner,
     private val outputDir: File,
-    private val listener: Listener
+    private val listener: Listener,
+    private val motionDetector: MotionDetector? = null
 ) {
     interface Listener {
         /** 1セグメントの録画が正常に完了して保存されたときに呼ばれる */
@@ -95,15 +100,34 @@ class DashcamRecorder(
 
         val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA // アウトカメラのみ
 
+        // motionDetector が渡されている場合、動体検知用の低解像度フレームを
+        // 供給する ImageAnalysis ユースケースも併せてバインドする
+        val imageAnalysis = motionDetector?.let { detector ->
+            ImageAnalysis.Builder()
+                .setTargetResolution(Size(320, 240))
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
+                .apply { setAnalyzer(cameraExecutor, detector) }
+        }
+
         try {
             cameraProvider.unbindAll()
             // Preview はバインドしない(GPU負荷削減、画面表示不要のため)
-            cameraProvider.bindToLifecycle(
-                lifecycleOwner,
-                cameraSelector,
-                videoCapture
-            )
-            Log.i(TAG, "カメラのバインドに成功しました")
+            if (imageAnalysis != null) {
+                cameraProvider.bindToLifecycle(
+                    lifecycleOwner,
+                    cameraSelector,
+                    videoCapture,
+                    imageAnalysis
+                )
+            } else {
+                cameraProvider.bindToLifecycle(
+                    lifecycleOwner,
+                    cameraSelector,
+                    videoCapture
+                )
+            }
+            Log.i(TAG, "カメラのバインドに成功しました(動体検知=${imageAnalysis != null})")
         } catch (e: Exception) {
             Log.e(TAG, "カメラのバインドに失敗しました", e)
             listener.onCameraInitFailed(e)
