@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="24dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="動画の保存先"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="8dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="録画自体は常にアプリ専用フォルダに保存されます。ここで保存先フォルダを選択すると、録画完了ごとに選択したフォルダへ自動的にコピーされます。"
+        android:textSize="13sp"
+        android:layout_marginBottom="16dp" />
+
+    <TextView
+        android:id="@+id/textCurrentLocation"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="現在の設定: アプリ専用フォルダのみ"
+        android:textSize="14sp"
+        android:layout_marginBottom="16dp" />
+
+    <Button
+        android:id="@+id/buttonChooseFolder"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="保存先フォルダを選択" />
+
+    <Button
+        android:id="@+id/buttonClearFolder"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="保存先の設定を解除" />
+
+</LinearLayout>

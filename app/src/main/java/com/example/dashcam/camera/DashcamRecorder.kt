@@ -5,6 +5,8 @@ import android.util.Log
 import android.util.Size
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.Preview
+import androidx.camera.core.UseCase
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FileOutputOptions
 import androidx.camera.video.Quality
@@ -26,7 +28,9 @@ import java.util.concurrent.Executors
  *
  * 設計方針(仕様書より):
  * - アウトカメラのみ使用
- * - Preview ユースケースはバインドしない(GPU負荷削減のため画面表示なし)
+ * - 設置時の画角調整のため Preview ユースケースを常にバインドする。
+ *   ただし実際に画面へ表示するかどうかは setPreviewSurfaceProvider() で
+ *   呼び出し側(Activity)が能動的に制御する(Activity非表示中は何もレンダリングされない)
  * - 常時ループ録画: SEGMENT_DURATION_MS ごとに録画ファイルを分割
  * - セグメント保存後にコールバックで通知し、ストレージ管理(古いファイル削除)は
  *   呼び出し側(StorageManager 等)に委譲する
@@ -71,6 +75,7 @@ class DashcamRecorder(
 
     private val cameraExecutor: Executor = Executors.newSingleThreadExecutor()
     private var videoCapture: VideoCapture<Recorder>? = null
+    private var preview: Preview? = null
     private var currentRecording: Recording? = null
     private var currentSegmentFile: File? = null
     private var segmentStartTimeMs: Long = 0L
@@ -120,6 +125,7 @@ class DashcamRecorder(
             .build()
 
         videoCapture = VideoCapture.withOutput(recorder)
+        preview = Preview.Builder().build()
 
         val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA // アウトカメラのみ
 
@@ -133,28 +139,30 @@ class DashcamRecorder(
                 .apply { setAnalyzer(cameraExecutor, detector) }
         }
 
+        val useCases = mutableListOf<UseCase>(videoCapture!!, preview!!)
+        imageAnalysis?.let { useCases.add(it) }
+
         try {
             cameraProvider.unbindAll()
-            // Preview はバインドしない(GPU負荷削減、画面表示不要のため)
-            if (imageAnalysis != null) {
-                cameraProvider.bindToLifecycle(
-                    lifecycleOwner,
-                    cameraSelector,
-                    videoCapture,
-                    imageAnalysis
-                )
-            } else {
-                cameraProvider.bindToLifecycle(
-                    lifecycleOwner,
-                    cameraSelector,
-                    videoCapture
-                )
-            }
+            cameraProvider.bindToLifecycle(
+                lifecycleOwner,
+                cameraSelector,
+                *useCases.toTypedArray()
+            )
             Log.i(TAG, "カメラのバインドに成功しました(動体検知=${imageAnalysis != null})")
         } catch (e: Exception) {
             Log.e(TAG, "カメラのバインドに失敗しました", e)
             listener.onCameraInitFailed(e)
         }
+    }
+
+    /**
+     * プレビュー映像の描画先を設定する。設置時の画角調整のため、Activityが
+     * 画面に表示されている間だけ呼び出し側が SurfaceProvider を渡す想定。
+     * nullを渡すと描画を停止する(Activityが非表示になったときなど)。
+     */
+    fun setPreviewSurfaceProvider(surfaceProvider: Preview.SurfaceProvider?) {
+        preview?.setSurfaceProvider(surfaceProvider)
     }
 
     /** 常時ループ録画を開始する。走行中モードで呼び出す想定。 */

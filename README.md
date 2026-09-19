@@ -64,7 +64,34 @@ Gradle Wrapperを同梱していないため、初回はAndroid Studioが自動�
   TextToSpeechによる音声警告。ストレージ危険域到達時・保護フォルダ上限超過時に読み上げ
   (同一警告の連発を防ぐため5分のクールダウンあり)
 
+## 画面表示について
+
+設置時の画角調整のため、**メイン画面表示中はカメラのプレビュー映像が表示されます**
+(`androidx.camera.view.PreviewView`)。`DashcamForegroundService`にバインドし、
+`Preview.SurfaceProvider`を中継する構成になっています。
+
+- Activityが表示されている間: `attachPreviewSurfaceProvider()`でプレビュー描画
+- Activityが非表示(onStop)になったら: `detachPreviewSurfaceProvider()`で描画停止
+
+録画自体はActivityの表示・非表示に関わらずサービス側で継続します。
+「走行中は画面を消してバッテリー節約」という当初の要件は、今後実装する
+「ディスプレイの時間設定OFF」機能(画面の疑似消灯タイマー)で別途対応する想定です。
+
+画面下部の「終了」ボタンから、確認ダイアログを経てドラレコ自体(フォアグラウンドサービス)を
+完全に終了できます。誤操作防止のため、タップ後に確認ダイアログが出ます。
+
+## 設定画面(保存先フォルダ)
+
+- `app/src/main/java/com/example/dashcam/SettingsActivity.kt`
+  メイン画面右上の三本線メニューから遷移。SAF(Storage Access Framework)で
+  任意のフォルダを選択すると、以降は録画完了ごとにそのフォルダへ自動コピーされる
+- `app/src/main/java/com/example/dashcam/storage/FileExporter.kt`
+  選択したフォルダへのコピー処理本体。録画自体は常にアプリ専用フォルダに書き込まれ、
+  これは追加のミラーリング(非破壊コピー)として動作する
+- `app/src/main/java/com/example/dashcam/settings/SettingsManager.kt`
+  設定の永続化(SharedPreferences)。保存先フォルダのURIを保持
+
 ## 未実装(今後追加予定)
 
-- 書き出し機能(FFmpegでのテキスト焼き込み)
+- 書き出し機能(FFmpegでのテキスト焼き込み)※実装方針を検討中(保留中)
 - ディスプレイの時間設定OFF(疑似消灯)

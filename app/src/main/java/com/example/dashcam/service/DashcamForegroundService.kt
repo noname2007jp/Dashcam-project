@@ -5,10 +5,12 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
+import androidx.camera.core.Preview
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 import com.example.dashcam.R
@@ -18,6 +20,8 @@ import com.example.dashcam.camera.MotionDetector
 import com.example.dashcam.location.DrivingStateDetector
 import com.example.dashcam.sensor.ShockDetector
 import com.example.dashcam.sensor.TailgatingDetector
+import com.example.dashcam.settings.SettingsManager
+import com.example.dashcam.storage.FileExporter
 import com.example.dashcam.storage.StorageManager
 import java.io.File
 
@@ -50,10 +54,33 @@ class DashcamForegroundService : LifecycleService() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var storageManager: StorageManager? = null
     private var voiceAlertManager: VoiceAlertManager? = null
+    private val settingsManager: SettingsManager by lazy { SettingsManager(this) }
+    private val fileExporter: FileExporter by lazy { FileExporter(this) }
 
     // 駐車監視モード中かどうか(動体検知トリガー録画を有効にするかの判定に使う)
     @Volatile
     private var isParkingMode = false
+
+    /**
+     * MainActivityがこのServiceにバインドしてPreview映像を受け取れるようにするためのBinder。
+     * ServiceはstartForegroundServiceで起動されつつ、Activityから同時にbindServiceもされる
+     * ハイブリッド構成(録画自体はActivityの有無に関わらず継続する)。
+     */
+    inner class LocalBinder : Binder() {
+        fun getService(): DashcamForegroundService = this@DashcamForegroundService
+    }
+
+    private val binder = LocalBinder()
+
+    /** 設置時の画角調整用。Activityが表示されている間だけ呼び出される想定。 */
+    fun attachPreviewSurfaceProvider(surfaceProvider: Preview.SurfaceProvider) {
+        recorder?.setPreviewSurfaceProvider(surfaceProvider)
+    }
+
+    /** Activityが非表示になったときに呼び出し、プレビュー描画を止める。 */
+    fun detachPreviewSurfaceProvider() {
+        recorder?.setPreviewSurfaceProvider(null)
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -326,12 +353,18 @@ class DashcamForegroundService : LifecycleService() {
                 override fun onSegmentSaved(file: File, durationMs: Long) {
                     Log.i(TAG, "セグメント保存: ${file.name}")
                     storageManager?.checkAndManage()
+                    settingsManager.saveLocationUri?.let { uri ->
+                        fileExporter.exportLoopSegment(uri, file)
+                    }
                 }
 
                 override fun onProtectedSegmentSaved(file: File, durationMs: Long) {
                     Log.i(TAG, "保護セグメント保存: ${file.name}")
                     updateNotification("イベント映像を保護フォルダに保存しました")
                     storageManager?.checkAndManage()
+                    settingsManager.saveLocationUri?.let { uri ->
+                        fileExporter.exportProtectedSegment(uri, file)
+                    }
                 }
 
                 override fun onRecordingError(error: Throwable) {
@@ -385,9 +418,9 @@ class DashcamForegroundService : LifecycleService() {
         super.onDestroy()
     }
 
-    // バインド機能は使わない(startService経由でのみ利用)
-    override fun onBind(intent: Intent): IBinder? {
+    // startForegroundServiceで起動されつつ、MainActivityからbindServiceもされる
+    override fun onBind(intent: Intent): IBinder {
         super.onBind(intent)
-        return null
+        return binder
     }
 }
