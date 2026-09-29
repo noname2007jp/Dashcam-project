@@ -1,6 +1,9 @@
 package com.example.dashcam.camera
 
+import android.content.ContentValues
 import android.content.Context
+import android.net.Uri
+import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
 import androidx.camera.core.CameraSelector
@@ -8,7 +11,7 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.core.UseCase
 import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.video.FileOutputOptions
+import androidx.camera.video.MediaStoreOutputOptions
 import androidx.camera.video.Quality
 import androidx.camera.video.QualitySelector
 import androidx.camera.video.Recorder
@@ -17,7 +20,6 @@ import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.Executor
@@ -32,27 +34,33 @@ import java.util.concurrent.Executors
  *   ただし実際に画面へ表示するかどうかは setPreviewSurfaceProvider() で
  *   呼び出し側(Activity)が能動的に制御する(Activity非表示中は何もレンダリングされない)
  * - 常時ループ録画: SEGMENT_DURATION_MS ごとに録画ファイルを分割
+ * - 録画は MediaStore(Downloads/公開領域)経由で直接 "Download/cam/dashcam_loop"
+ *   フォルダへ書き込む。Android/data配下のアプリ専用フォルダは一切使用しない
+ *   (ファイルマネージャー等から直接アクセスできるようにするため)
  * - セグメント保存後にコールバックで通知し、ストレージ管理(古いファイル削除)は
  *   呼び出し側(StorageManager 等)に委譲する
  * - motionDetector を渡した場合、VideoCapture と同時に ImageAnalysis も
  *   バインドし、駐車監視モードの動体検知フレームを供給する
+ *
+ * 注意: MediaStore.Downloads は API 29(Android 10)以降のみ利用可能なため、
+ * このクラスは minSdk 29 を前提としている。
  */
 class DashcamRecorder(
     private val context: Context,
     private val lifecycleOwner: LifecycleOwner,
-    private val outputDir: File,
     private val listener: Listener,
-    private val motionDetector: MotionDetector? = null
+    private val motionDetector: MotionDetector? = null,
+    private val preferredCameraId: String? = null
 ) {
     interface Listener {
         /** 1セグメントの録画が正常に完了して保存されたときに呼ばれる */
-        fun onSegmentSaved(file: File, durationMs: Long)
+        fun onSegmentSaved(uri: Uri, displayName: String, durationMs: Long)
 
         /**
          * 衝撃検知等により保護対象となったセグメントが、保護フォルダへの
          * 移動を完了したときに呼ばれる(onSegmentSavedの代わりに呼ばれる)
          */
-        fun onProtectedSegmentSaved(file: File, durationMs: Long)
+        fun onProtectedSegmentSaved(uri: Uri, displayName: String, durationMs: Long)
 
         /** 録画中にエラーが発生したときに呼ばれる(ストレージ不足等) */
         fun onRecordingError(error: Throwable)
@@ -67,8 +75,9 @@ class DashcamRecorder(
         // セグメント分割間隔(ミリ秒)。仕様書: 1〜3分単位でファイル分割
         const val SEGMENT_DURATION_MS = 2 * 60 * 1000L // 2分
 
-        // 保護対象ファイルの保存先サブフォルダ名(outputDirの親配下に作成)
-        private const val PROTECTED_DIR_NAME = "dashcam_protected"
+        // MediaStore上の保存先(Downloadコレクション配下の相対パス)
+        const val LOOP_RELATIVE_PATH = "Download/cam/dashcam_loop/"
+        const val PROTECTED_RELATIVE_PATH = "Download/cam/dashcam_protected/"
 
         private val FILENAME_FORMAT = SimpleDateFormat("yyyy-MM-dd_HHmmss", Locale.JAPAN)
     }
@@ -77,11 +86,12 @@ class DashcamRecorder(
     private var videoCapture: VideoCapture<Recorder>? = null
     private var preview: Preview? = null
     private var currentRecording: Recording? = null
-    private var currentSegmentFile: File? = null
+    private var currentSegmentUri: Uri? = null
+    private var currentSegmentDisplayName: String? = null
     private var segmentStartTimeMs: Long = 0L
 
     // 直前に完了したセグメント(衝撃検知が発生した瞬間の「1つ前」を保護するために保持)
-    private var lastCompletedSegmentFile: File? = null
+    private var lastCompletedSegmentUri: Uri? = null
 
     // 現在録画中のセグメントが保護対象としてマークされているかどうか
     @Volatile
@@ -89,10 +99,6 @@ class DashcamRecorder(
 
     // 保護処理の状態を守るためのロック(複数スレッドからの呼び出しに対応)
     private val protectionLock = Any()
-
-    private val protectedDir: File by lazy {
-        File(outputDir.parentFile ?: outputDir, PROTECTED_DIR_NAME)
-    }
 
     private val segmentHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var segmentRunnable: Runnable? = null
@@ -127,7 +133,9 @@ class DashcamRecorder(
         videoCapture = VideoCapture.withOutput(recorder)
         preview = Preview.Builder().build()
 
-        val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA // アウトカメラのみ
+        val cameraSelector = preferredCameraId?.let {
+            CameraLensHelper.selectorForCameraId(it)
+        } ?: CameraSelector.DEFAULT_BACK_CAMERA // 未指定時は標準の背面カメラ
 
         // motionDetector が渡されている場合、動体検知用の低解像度フレームを
         // 供給する ImageAnalysis ユースケースも併せてバインドする
@@ -187,48 +195,45 @@ class DashcamRecorder(
      * 「保護対象」としてマークする。衝撃検知(Gセンサー)や手動録画ボタンから
      * 呼び出す想定。
      *
-     * - 直前の完了済みセグメントは即座に保護フォルダへ移動する
+     * - 直前の完了済みセグメントは即座にMediaStore上で保護フォルダへ移動する
+     *   (RELATIVE_PATHの更新による論理的な移動。ファイルの再コピーは発生しない)
      * - 現在録画中のセグメントは、録画完了(Finalize)時に保護フォルダへ移動する
      *   (セグメント境界をまたぐイベントでも前後を録り逃さないための設計)
      */
     fun markCurrentSegmentAsProtected() {
         synchronized(protectionLock) {
             pendingProtectionForCurrentSegment = true
-            Log.i(TAG, "現在のセグメントを保護対象としてマーク: ${currentSegmentFile?.name}")
+            Log.i(TAG, "現在のセグメントを保護対象としてマーク: $currentSegmentDisplayName")
 
-            val previousFile = lastCompletedSegmentFile
-            if (previousFile != null && previousFile.exists()) {
+            val previousUri = lastCompletedSegmentUri
+            if (previousUri != null) {
                 cameraExecutor.execute {
-                    val moved = moveToProtectedFolder(previousFile)
-                    if (moved != null) {
-                        Log.i(TAG, "直前のセグメントを保護フォルダへ移動: ${moved.name}")
+                    val moved = moveToProtectedFolder(previousUri)
+                    if (moved) {
+                        Log.i(TAG, "直前のセグメントを保護フォルダへ移動しました")
                     }
                 }
                 // 同じセグメントを二重に保護対象としないようクリア
-                lastCompletedSegmentFile = null
+                lastCompletedSegmentUri = null
             }
         }
     }
 
     /**
-     * ファイルを保護フォルダへ移動する。同一ストレージ内であれば File.renameTo で
-     * 高速に移動できるが、失敗した場合はコピー後に元ファイルを削除するフォールバックを行う。
+     * MediaStore上のアイテムを保護フォルダへ「移動」する。
+     * RELATIVE_PATHを更新するだけなので、実ファイルのコピー/削除は発生しない
+     * (Android 10以降でサポートされる移動方法)。
      */
-    private fun moveToProtectedFolder(file: File): File? {
-        if (!protectedDir.exists()) protectedDir.mkdirs()
-
-        val destination = File(protectedDir, file.name)
+    private fun moveToProtectedFolder(uri: Uri): Boolean {
         return try {
-            if (file.renameTo(destination)) {
-                destination
-            } else {
-                file.copyTo(destination, overwrite = true)
-                file.delete()
-                destination
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.RELATIVE_PATH, PROTECTED_RELATIVE_PATH)
             }
+            val updated = context.contentResolver.update(uri, values, null, null)
+            updated > 0
         } catch (e: Exception) {
-            Log.e(TAG, "保護フォルダへの移動に失敗しました: ${file.name}", e)
-            null
+            Log.e(TAG, "保護フォルダへの移動に失敗しました", e)
+            false
         }
     }
 
@@ -238,13 +243,23 @@ class DashcamRecorder(
             return
         }
 
-        if (!outputDir.exists()) outputDir.mkdirs()
-
         val fileName = "${FILENAME_FORMAT.format(System.currentTimeMillis())}.mp4"
-        val outputFile = File(outputDir, fileName)
-        val outputOptions = FileOutputOptions.Builder(outputFile).build()
 
-        currentSegmentFile = outputFile
+        val contentValues = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+            put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, LOOP_RELATIVE_PATH)
+        }
+
+        val outputOptions = MediaStoreOutputOptions.Builder(
+            context.contentResolver,
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI
+        )
+            .setContentValues(contentValues)
+            .build()
+
+        currentSegmentDisplayName = fileName
+        currentSegmentUri = null
         segmentStartTimeMs = System.currentTimeMillis()
 
         currentRecording = vc.output
@@ -289,7 +304,7 @@ class DashcamRecorder(
     private fun handleRecordEvent(event: VideoRecordEvent) {
         when (event) {
             is VideoRecordEvent.Start -> {
-                Log.i(TAG, "セグメント録画開始: ${currentSegmentFile?.name}")
+                Log.i(TAG, "セグメント録画開始: $currentSegmentDisplayName")
             }
             is VideoRecordEvent.Finalize -> {
                 if (event.hasError()) {
@@ -300,9 +315,11 @@ class DashcamRecorder(
                     // ストレージ不足等の場合、呼び出し元(StorageManager)が
                     // 容量確保後に再度 startLoopRecording() を呼ぶ想定
                 } else {
-                    val file = currentSegmentFile
+                    val uri = event.outputResults.outputUri
+                    val displayName = currentSegmentDisplayName
                     val duration = System.currentTimeMillis() - segmentStartTimeMs
-                    if (file != null) {
+
+                    if (displayName != null) {
                         val shouldProtect = synchronized(protectionLock) {
                             val flag = pendingProtectionForCurrentSegment
                             pendingProtectionForCurrentSegment = false
@@ -310,19 +327,20 @@ class DashcamRecorder(
                         }
 
                         if (shouldProtect) {
-                            Log.i(TAG, "保護対象セグメントを保存完了: ${file.name} (${duration}ms)")
-                            val moved = moveToProtectedFolder(file)
-                            listener.onProtectedSegmentSaved(moved ?: file, duration)
-                            // 保護フォルダに移動したファイルは通常のループ削除対象では
-                            // ないため、lastCompletedSegmentFile には設定しない
+                            Log.i(TAG, "保護対象セグメントを保存完了: $displayName (${duration}ms)")
+                            moveToProtectedFolder(uri)
+                            listener.onProtectedSegmentSaved(uri, displayName, duration)
+                            // 保護フォルダに移動したアイテムは通常のループ削除対象では
+                            // ないため、lastCompletedSegmentUri には設定しない
                         } else {
-                            Log.i(TAG, "セグメント保存完了: ${file.name} (${duration}ms)")
-                            lastCompletedSegmentFile = file
-                            listener.onSegmentSaved(file, duration)
+                            Log.i(TAG, "セグメント保存完了: $displayName (${duration}ms)")
+                            lastCompletedSegmentUri = uri
+                            listener.onSegmentSaved(uri, displayName, duration)
                         }
                     }
                 }
                 currentRecording = null
+                currentSegmentUri = null
 
                 // 継続録画中なら次のセグメントを開始(ループ)
                 if (isRunning) {

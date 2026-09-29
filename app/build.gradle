@@ -9,7 +9,7 @@ android {
 
     defaultConfig {
         applicationId "com.example.dashcam"
-        minSdk 26
+        minSdk 29
         targetSdk 34
         versionCode 1
         versionName "1.0"
@@ -51,4 +51,6 @@ dependencies {
     implementation 'androidx.activity:activity-ktx:1.9.1'
     implementation 'com.google.android.gms:play-services-location:21.3.0'
     implementation 'androidx.documentfile:documentfile:1.0.1'
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.4'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
 }

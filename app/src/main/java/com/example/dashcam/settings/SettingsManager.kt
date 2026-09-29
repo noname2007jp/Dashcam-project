@@ -17,6 +17,7 @@ class SettingsManager(context: Context) {
     companion object {
         private const val PREFS_NAME = "dashcam_settings"
         private const val KEY_SAVE_LOCATION_URI = "save_location_uri"
+        private const val KEY_PREFERRED_CAMERA_ID = "preferred_camera_id"
     }
 
     /** SAFで選択した保存先フォルダのツリーURI。未設定ならnull。 */
@@ -29,4 +30,11 @@ class SettingsManager(context: Context) {
     fun clearSaveLocation() {
         prefs.edit().remove(KEY_SAVE_LOCATION_URI).apply()
     }
+
+    /** 選択された背面カメラのカメラID(camera2のID)。未設定(標準)ならnull。 */
+    var preferredCameraId: String?
+        get() = prefs.getString(KEY_PREFERRED_CAMERA_ID, null)
+        set(value) {
+            prefs.edit().putString(KEY_PREFERRED_CAMERA_ID, value).apply()
+        }
 }

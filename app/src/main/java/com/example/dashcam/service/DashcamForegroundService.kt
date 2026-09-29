@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.net.Uri
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
@@ -18,12 +19,12 @@ import com.example.dashcam.audio.VoiceAlertManager
 import com.example.dashcam.camera.DashcamRecorder
 import com.example.dashcam.camera.MotionDetector
 import com.example.dashcam.location.DrivingStateDetector
+import com.example.dashcam.metadata.MetadataRecorder
 import com.example.dashcam.sensor.ShockDetector
 import com.example.dashcam.sensor.TailgatingDetector
 import com.example.dashcam.settings.SettingsManager
 import com.example.dashcam.storage.FileExporter
 import com.example.dashcam.storage.StorageManager
-import java.io.File
 
 /**
  * ドラレコ本体のフォアグラウンドサービス。
@@ -51,6 +52,7 @@ class DashcamForegroundService : LifecycleService() {
     private var tailgatingDetector: TailgatingDetector? = null
     private var drivingStateDetector: DrivingStateDetector? = null
     private var motionDetector: MotionDetector? = null
+    private var metadataRecorder: MetadataRecorder? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var storageManager: StorageManager? = null
     private var voiceAlertManager: VoiceAlertManager? = null
@@ -103,6 +105,7 @@ class DashcamForegroundService : LifecycleService() {
                 startShockDetector()
                 startTailgatingDetector()
                 startDrivingStateDetector()
+                startMetadataRecorder()
             }
         }
 
@@ -169,6 +172,20 @@ class DashcamForegroundService : LifecycleService() {
             if (it.isHeld) it.release()
         }
         wakeLock = null
+    }
+
+    private fun startMetadataRecorder() {
+        if (metadataRecorder != null) {
+            Log.w(TAG, "既にMetadataRecorderが起動しています")
+            return
+        }
+        metadataRecorder = MetadataRecorder(this)
+        metadataRecorder?.start()
+    }
+
+    private fun stopMetadataRecorder() {
+        metadataRecorder?.stop()
+        metadataRecorder = null
     }
 
     private fun startDrivingStateDetector() {
@@ -287,12 +304,8 @@ class DashcamForegroundService : LifecycleService() {
             return
         }
 
-        val outputDir = File(getExternalFilesDir(null), "dashcam_loop")
-        val protectedDir = File(getExternalFilesDir(null), "dashcam_protected")
-
         storageManager = StorageManager(
-            loopDir = outputDir,
-            protectedDir = protectedDir,
+            context = this,
             listener = object : StorageManager.Listener {
                 override fun onAutoDeleted(deletedCount: Int, freedBytes: Long) {
                     Log.i(TAG, "自動削除: ${deletedCount}件 (${freedBytes}bytes解放)")
@@ -347,23 +360,35 @@ class DashcamForegroundService : LifecycleService() {
         recorder = DashcamRecorder(
             context = this,
             lifecycleOwner = this, // LifecycleService自身がLifecycleOwner
-            outputDir = outputDir,
             motionDetector = motionDetector,
+            preferredCameraId = settingsManager.preferredCameraId,
             listener = object : DashcamRecorder.Listener {
-                override fun onSegmentSaved(file: File, durationMs: Long) {
-                    Log.i(TAG, "セグメント保存: ${file.name}")
+                override fun onSegmentSaved(uri: Uri, displayName: String, durationMs: Long) {
+                    Log.i(TAG, "セグメント保存: $displayName")
                     storageManager?.checkAndManage()
-                    settingsManager.saveLocationUri?.let { uri ->
-                        fileExporter.exportLoopSegment(uri, file)
+                    val samples = metadataRecorder?.drainSamples() ?: emptyList()
+                    metadataRecorder?.saveSamplesToMediaStore(
+                        samples, displayName, DashcamRecorder.LOOP_RELATIVE_PATH
+                    )
+                    settingsManager.saveLocationUri?.let { customUri ->
+                        fileExporter.exportLoopSegment(customUri, uri, displayName)
                     }
                 }
 
-                override fun onProtectedSegmentSaved(file: File, durationMs: Long) {
-                    Log.i(TAG, "保護セグメント保存: ${file.name}")
+                override fun onProtectedSegmentSaved(
+                    uri: Uri,
+                    displayName: String,
+                    durationMs: Long
+                ) {
+                    Log.i(TAG, "保護セグメント保存: $displayName")
                     updateNotification("イベント映像を保護フォルダに保存しました")
                     storageManager?.checkAndManage()
-                    settingsManager.saveLocationUri?.let { uri ->
-                        fileExporter.exportProtectedSegment(uri, file)
+                    val samples = metadataRecorder?.drainSamples() ?: emptyList()
+                    metadataRecorder?.saveSamplesToMediaStore(
+                        samples, displayName, DashcamRecorder.PROTECTED_RELATIVE_PATH
+                    )
+                    settingsManager.saveLocationUri?.let { customUri ->
+                        fileExporter.exportProtectedSegment(customUri, uri, displayName)
                     }
                 }
 
@@ -397,6 +422,7 @@ class DashcamForegroundService : LifecycleService() {
         stopShockDetector()
         stopTailgatingDetector()
         stopDrivingStateDetector()
+        stopMetadataRecorder()
         releaseWakeLock()
         voiceAlertManager?.release()
         voiceAlertManager = null
@@ -412,6 +438,7 @@ class DashcamForegroundService : LifecycleService() {
         stopShockDetector()
         stopTailgatingDetector()
         stopDrivingStateDetector()
+        stopMetadataRecorder()
         releaseWakeLock()
         voiceAlertManager?.release()
         voiceAlertManager = null

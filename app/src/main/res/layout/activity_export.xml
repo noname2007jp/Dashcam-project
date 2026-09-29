@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="書き出しオプション"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="16dp" />
+
+        <Button
+            android:id="@+id/buttonPickVideo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="動画を選択" />
+
+        <TextView
+            android:id="@+id/textSelectedVideo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="24dp"
+            android:text="動画が選択されていません"
+            android:textSize="13sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="表示する情報"
+            android:textSize="14sp"
+            android:layout_marginBottom="8dp" />
+
+        <CheckBox
+            android:id="@+id/checkDate"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="日時"
+            android:checked="true" />
+
+        <CheckBox
+            android:id="@+id/checkLocation"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="位置情報(緯度経度)"
+            android:checked="true" />
+
+        <CheckBox
+            android:id="@+id/checkSpeed"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="速度(km/h)"
+            android:checked="true"
+            android:layout_marginBottom="16dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="表示位置"
+            android:textSize="14sp"
+            android:layout_marginBottom="8dp" />
+
+        <Spinner
+            android:id="@+id/spinnerPosition"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="24dp" />
+
+        <Button
+            android:id="@+id/buttonExport"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="書き出す"
+            android:enabled="false" />
+
+        <TextView
+            android:id="@+id/textProgress"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text=""
+            android:textSize="13sp" />
+
+        <ProgressBar
+            android:id="@+id/progressBar"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:indeterminate="true"
+            android:visibility="gone" />
+
+    </LinearLayout>
+</ScrollView>

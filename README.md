@@ -80,18 +80,101 @@ Gradle Wrapperを同梱していないため、初回はAndroid Studioが自動�
 画面下部の「終了」ボタンから、確認ダイアログを経てドラレコ自体(フォアグラウンドサービス)を
 完全に終了できます。誤操作防止のため、タップ後に確認ダイアログが出ます。
 
-## 設定画面(保存先フォルダ)
+## 保存先について(重要: Android/dataは使用しません)
+
+**録画は常にMediaStore経由で公開の`Download/cam`フォルダへ直接保存されます。**
+`Android/data/com.example.dashcam/files`のようなアプリ専用フォルダは一切使用しません。
+理由は、アプリ専用フォルダは他のアプリ(ファイルマネージャー・動画プレイヤー等)から
+直接アクセスしづらく、再生や整理がしにくいためです。
+
+- ループ録画: `Download/cam/dashcam_loop/`
+- 保護されたイベント映像: `Download/cam/dashcam_protected/`
+- 保護フォルダへの「移動」は、ファイルの実体コピーではなくMediaStoreの
+  `RELATIVE_PATH`更新によって行われるため高速(Android 10以降でサポートされる方式)
+- **このためminSdkを29(Android 10)に引き上げています**(MediaStore.Downloadsコレクション
+  がAPI 29以降のみ対応のため)
+
+## 設定画面(追加コピー先フォルダ・使用レンズ)
 
 - `app/src/main/java/com/example/dashcam/SettingsActivity.kt`
-  メイン画面右上の三本線メニューから遷移。SAF(Storage Access Framework)で
-  任意のフォルダを選択すると、以降は録画完了ごとにそのフォルダへ自動コピーされる
+  メイン画面右上の三本線メニューから遷移。
+  - **追加コピー先フォルダ**: SAFで任意のフォルダを選ぶと、`Download/cam`への保存に加えて
+    そのフォルダへも自動コピーされる(例: 別のSDカードへのバックアップ用途)
+  - **使用レンズ**: 端末が複数の背面カメラ(広角等)を持つ場合、選択できる
+    (`CameraLensHelper`が焦点距離から簡易的に「広角/標準/望遠」ラベルを推定)
 - `app/src/main/java/com/example/dashcam/storage/FileExporter.kt`
-  選択したフォルダへのコピー処理本体。録画自体は常にアプリ専用フォルダに書き込まれ、
-  これは追加のミラーリング(非破壊コピー)として動作する
+  追加コピー先フォルダ(SAF)へのコピー処理本体。`Download/cam`への保存自体は
+  `DashcamRecorder`がMediaStore経由で直接行うため、これは追加ミラーのみを担当する
+- `app/src/main/java/com/example/dashcam/storage/StorageManager.kt`
+  MediaStoreクエリで`Download/cam`配下のファイルを管理(空き容量チェック・自動削除・
+  保護フォルダの上限チェック)。ファイルシステムではなくMediaStoreを直接操作する
+- `app/src/main/java/com/example/dashcam/camera/CameraLensHelper.kt`
+  背面カメラの列挙・ラベル付け・CameraSelector生成
 - `app/src/main/java/com/example/dashcam/settings/SettingsManager.kt`
-  設定の永続化(SharedPreferences)。保存先フォルダのURIを保持
+  設定の永続化(SharedPreferences)。追加コピー先フォルダURI・優先カメラIDを保持
+
+## メタデータ記録(方式3)
+
+- `app/src/main/java/com/example/dashcam/metadata/MetadataRecorder.kt`
+  GPS位置・速度・日時を1秒間隔でサンプリングし、セグメント保存完了のタイミングで
+  動画と同じベースファイル名(拡張子のみ`.json`)・同じ相対パスでMediaStoreに保存する
+  (例: `2026-09-18_143207.mp4` に対して `2026-09-18_143207.json`)
+- 映像自体への焼き込みはまだ行わない(将来のMediaCodec+OpenGLベースの書き出し機能が
+  このJSONを読み込んで使う想定)
+- GPSの測位ができていない場合でもタイムスタンプ自体は記録し続ける(位置・速度はnull)
+
+### 既知の制約
+
+- 衝撃検知等で「直前に完了したセグメント」が事後的に保護フォルダへ移動される場合、
+  対応するメタデータJSONはこの移動処理の対象外(ループフォルダに残る)。
+  現状は許容範囲としているが、必要であれば今後の改善対象とする
+
+## 書き出し機能(MediaCodec + OpenGL、FFmpeg不使用)
+
+参考記事([takusan.negitoro.dev](https://takusan.negitoro.dev/posts/android_add_canvas_text_to_video/))
+の構成をベースに実装。
+
+- `app/src/main/java/com/example/dashcam/export/CodecInputSurface.kt`
+  EGL/OpenGLのセットアップ。MediaCodecのエンコーダー入力SurfaceをOpenGL経由で描画可能にする
+- `app/src/main/java/com/example/dashcam/export/TextureRenderer.kt`
+  動画フレーム(External OESテクスチャ)とCanvas(2Dテクスチャ)をフラグメントシェーダーで
+  切り替えながら合成描画する
+- `app/src/main/java/com/example/dashcam/export/VideoOverlayProcessor.kt`
+  MediaExtractor(デコード)→OpenGL合成→MediaCodec(エンコード)→MediaMuxerの本体処理。
+  音声は含まない(映像のみ)
+- `app/src/main/java/com/example/dashcam/export/AudioMuxer.kt`
+  映像のみのファイルに、元動画の音声トラックをストリームコピー(再エンコードなし)で合成
+- `app/src/main/java/com/example/dashcam/export/OverlayTextRenderer.kt`
+  メタデータJSON(MetadataRecorder.Sample)を動画の再生位置に応じてCanvasへ描画する。
+  日時/位置/速度のON・OFF、表示位置(四隅)に対応
+- `app/src/main/java/com/example/dashcam/export/VideoExportManager.kt`
+  上記を統括し、`Download/cam/dashcam_export/`へMediaStore経由で保存する
+- `app/src/main/java/com/example/dashcam/ExportActivity.kt`
+  書き出し操作画面。メイン画面右上メニュー(オーバーフロー)の「書き出し」から遷移。
+  SAFで動画を選択すると、同じベース名の`.json`をMediaStoreから自動的に探して使う
+
+### 処理の流れ
+
+1. 元動画(MediaStoreのUri)を`MediaExtractor`で直接デコード(事前コピー不要)
+2. デコードされたフレームをOpenGLでSurfaceTextureとして受け取り、同時にメタデータの
+   テキストをCanvasに描画してテクスチャとして合成
+3. 合成結果を`MediaCodec`のエンコーダー入力Surfaceへ描画→再エンコード(映像のみ)
+4. 元動画から音声トラックを抜き出し、映像のみのファイルとストリームコピーで合成
+5. 完成したmp4を`Download/cam/dashcam_export/`へMediaStore経由で保存
+
+### 既知の制約・注意点
+
+- OpenGL/MediaCodecまわりは実機でないと正しく動作するか検証できない(エミュレータでは
+  不安定になりやすい)。**実機での動作確認が必須**
+- 処理時間はそこそこかかる(動画の長さ・端末性能次第)。現状はActivity内の
+  コルーチンで実行しているため、Activityを閉じると処理が中断される可能性がある。
+  本格的に使うならフォアグラウンドサービス化を検討すべき
+- 音声・映像のインターリーブは簡易的な実装(トラックごとに一括書き込み)。
+  一般的なプレイヤーでは問題なく再生できるはずだが、シビアなストリーミング用途には
+  不向き
+- メタデータが見つからない場合は、テキストなしでそのまま書き出される
 
 ## 未実装(今後追加予定)
 
-- 書き出し機能(FFmpegでのテキスト焼き込み)※実装方針を検討中(保留中)
 - ディスプレイの時間設定OFF(疑似消灯)
+- 書き出し処理のフォアグラウンドサービス化(長時間処理の安定性向上)

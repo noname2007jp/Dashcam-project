@@ -1,11 +1,20 @@
 package com.example.dashcam.storage
 
+import android.content.Context
+import android.net.Uri
+import android.os.Environment
 import android.os.StatFs
+import android.provider.MediaStore
 import android.util.Log
-import java.io.File
+import com.example.dashcam.camera.DashcamRecorder
 
 /**
  * ストレージ空き容量の監視・自動削除を行うクラス。
+ *
+ * 録画がAndroid/data配下のアプリ専用フォルダを使わず、MediaStore経由で
+ * 公開の Download/cam フォルダへ直接書き込まれる設計になったため、
+ * このクラスもファイルシステム(java.io.File)ではなくMediaStoreクエリで
+ * 対象ファイルを管理する。
  *
  * 設計方針(仕様書より):
  * - 自動削除ライン(デフォルト15%): 下回ったら通常のループ録画から古いファイル順に削除
@@ -14,8 +23,7 @@ import java.io.File
  * - チェックタイミングは呼び出し側(セグメント保存完了時など)に委譲する
  */
 class StorageManager(
-    private val loopDir: File,
-    private val protectedDir: File,
+    private val context: Context,
     private val listener: Listener,
     private val autoDeleteThresholdPercent: Int = DEFAULT_AUTO_DELETE_THRESHOLD_PERCENT,
     private val stopThresholdPercent: Int = DEFAULT_STOP_THRESHOLD_PERCENT,
@@ -69,13 +77,9 @@ class StorageManager(
     }
 
     private fun handleCritical(freePercent: Int) {
-        val now = System.currentTimeMillis()
-        // 録画停止自体は呼び出し側が毎回安全に処理できる前提のため常に通知するが、
-        // 音声警告のスパムは呼び出し側の判断に委ねるためここではフラグ管理はしない。
-        // (呼び出し側でTTSのクールダウンを別途管理する設計にしてもよい)
         Log.w(TAG, "空き容量が録画停止ライン(${stopThresholdPercent}%)を下回りました: ${freePercent}%")
         listener.onStorageCritical(freePercent)
-        lastCriticalWarnTimeMs = now
+        lastCriticalWarnTimeMs = System.currentTimeMillis()
     }
 
     /** 直近の警告からクールダウン時間が経過しているか(呼び出し側での音声抑制判定に利用可能) */
@@ -87,25 +91,49 @@ class StorageManager(
         return System.currentTimeMillis() - lastProtectedWarnTimeMs < WARNING_COOLDOWN_MS
     }
 
+    /** ループ録画フォルダ(dashcam_loop)内のアイテムを、古い順に削除して空きを確保する */
     private fun autoDeleteOldest() {
-        if (!loopDir.exists()) return
-
-        val files = loopDir.listFiles { f -> f.isFile }?.sortedBy { it.lastModified() }
-            ?: return
+        val resolver = context.contentResolver
+        val projection = arrayOf(
+            MediaStore.MediaColumns._ID,
+            MediaStore.MediaColumns.SIZE
+        )
+        val selection = "${MediaStore.MediaColumns.RELATIVE_PATH} = ?"
+        val selectionArgs = arrayOf(DashcamRecorder.LOOP_RELATIVE_PATH)
+        val sortOrder = "${MediaStore.MediaColumns.DATE_ADDED} ASC"
 
         var deletedCount = 0
         var freedBytes = 0L
 
-        for (file in files) {
-            val freePercent = computeFreePercent()
-            if (freePercent > autoDeleteThresholdPercent) break
+        try {
+            resolver.query(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                projection,
+                selection,
+                selectionArgs,
+                sortOrder
+            )?.use { cursor ->
+                val idColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
 
-            val size = file.length()
-            if (file.delete()) {
-                deletedCount++
-                freedBytes += size
-                Log.i(TAG, "古いセグメントを自動削除: ${file.name} (${size}bytes)")
+                while (cursor.moveToNext()) {
+                    if (computeFreePercent() > autoDeleteThresholdPercent) break
+
+                    val id = cursor.getLong(idColumn)
+                    val size = cursor.getLong(sizeColumn)
+                    val itemUri: Uri = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                        .buildUpon().appendPath(id.toString()).build()
+
+                    val rows = resolver.delete(itemUri, null, null)
+                    if (rows > 0) {
+                        deletedCount++
+                        freedBytes += size
+                        Log.i(TAG, "古いセグメントを自動削除: id=$id (${size}bytes)")
+                    }
+                }
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "自動削除中にエラーが発生しました", e)
         }
 
         if (deletedCount > 0) {
@@ -114,10 +142,29 @@ class StorageManager(
     }
 
     private fun checkProtectedFolderSize() {
-        if (!protectedDir.exists()) return
+        val resolver = context.contentResolver
+        val projection = arrayOf(MediaStore.MediaColumns.SIZE)
+        val selection = "${MediaStore.MediaColumns.RELATIVE_PATH} = ?"
+        val selectionArgs = arrayOf(DashcamRecorder.PROTECTED_RELATIVE_PATH)
 
-        val totalSize = protectedDir.listFiles { f -> f.isFile }
-            ?.sumOf { it.length() } ?: 0L
+        var totalSize = 0L
+        try {
+            resolver.query(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                projection,
+                selection,
+                selectionArgs,
+                null
+            )?.use { cursor ->
+                val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+                while (cursor.moveToNext()) {
+                    totalSize += cursor.getLong(sizeColumn)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "保護フォルダサイズの取得に失敗しました", e)
+            return
+        }
 
         if (totalSize > protectedMaxBytes) {
             Log.w(TAG, "保護フォルダが上限(${protectedMaxBytes}bytes)を超過: ${totalSize}bytes")
@@ -126,9 +173,13 @@ class StorageManager(
         }
     }
 
+    /** 公開Downloadボリュームの空き容量(%)を取得する */
     private fun computeFreePercent(): Int {
         return try {
-            val stat = StatFs(loopDir.path)
+            @Suppress("DEPRECATION")
+            val downloadsDir =
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            val stat = StatFs(downloadsDir.path)
             val totalBytes = stat.blockCountLong * stat.blockSizeLong
             val availableBytes = stat.availableBlocksLong * stat.blockSizeLong
             if (totalBytes <= 0) return 100

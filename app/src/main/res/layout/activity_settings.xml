@@ -16,7 +16,7 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="録画自体は常にアプリ専用フォルダに保存されます。ここで保存先フォルダを選択すると、録画完了ごとに選択したフォルダへ自動的にコピーされます。"
+        android:text="録画は常に公開のDownload/camフォルダへ直接保存されます(Android/data配下のアプリ専用フォルダは使用しません)。加えて、別のフォルダを指定すると、録画完了ごとにそちらへも追加コピーされます。"
         android:textSize="13sp"
         android:layout_marginBottom="16dp" />
 
@@ -32,13 +32,41 @@
         android:id="@+id/buttonChooseFolder"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="保存先フォルダを選択" />
+        android:text="追加コピー先フォルダを選択" />
 
     <Button
         android:id="@+id/buttonClearFolder"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:text="保存先の設定を解除" />
+        android:text="追加コピーの設定を解除" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="24dp"
+        android:layout_marginBottom="16dp"
+        android:background="#CCCCCC" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="使用するレンズ"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="8dp" />
+
+    <TextView
+        android:id="@+id/textLensDescription"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="この端末で選択可能なレンズを確認中..."
+        android:textSize="13sp"
+        android:layout_marginBottom="8dp" />
+
+    <RadioGroup
+        android:id="@+id/radioGroupLens"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content" />
 
 </LinearLayout>
