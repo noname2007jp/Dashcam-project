@@ -361,7 +361,7 @@ class DashcamForegroundService : LifecycleService() {
             context = this,
             lifecycleOwner = this, // LifecycleService自身がLifecycleOwner
             motionDetector = motionDetector,
-            preferredCameraId = settingsManager.preferredCameraId,
+            preferredZoomRatio = settingsManager.preferredZoomRatio,
             listener = object : DashcamRecorder.Listener {
                 override fun onSegmentSaved(uri: Uri, displayName: String, durationMs: Long) {
                     Log.i(TAG, "セグメント保存: $displayName")

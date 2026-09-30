@@ -1,66 +1,62 @@
 package com.example.dashcam.camera
 
 import android.hardware.camera2.CameraCharacteristics
+import android.os.Build
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
-import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
 import androidx.camera.lifecycle.ProcessCameraProvider
 
 /**
- * 端末の背面カメラを列挙し、広角(超広角)対応の場合に選択できるようにするヘルパー。
+ * 背面カメラのレンズ切り替えを扱うヘルパー。
  *
- * 焦点距離(LENS_INFO_AVAILABLE_FOCAL_LENGTHS)の最小値が小さいカメラほど
- * 画角が広い(広角寄り)とみなして並べ替える。焦点距離だけで正確な画角種別を
- * 判定することはできないため、あくまで簡易的な目安として扱う。
+ * Pixelを含む多くの端末では、広角・超広角は別々のカメラIDとして公開されておらず、
+ * 1つの論理カメラ(logical camera)がズーム倍率に応じて内部的にレンズを切り替える
+ * 構成になっている。そのため「別カメラIDを選ぶ」方式ではなく、
+ * ズーム倍率(1.0未満で超広角に切り替わる)を指定する方式を使う。
+ *
+ * 最小ズーム倍率は CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE (Android 11以降)
+ * から取得する。これが1.0未満であれば超広角レンズにアクセス可能と判断する。
  */
 object CameraLensHelper {
 
-    data class BackCameraOption(
-        val cameraId: String,
-        val minFocalLengthMm: Float?
+    data class ZoomLensOption(
+        val label: String,
+        val zoomRatio: Float
     )
 
+    private const val ULTRA_WIDE_THRESHOLD = 0.9f
+
+    /**
+     * 背面カメラで選択可能なレンズ(ズーム倍率)の一覧を返す。
+     * 超広角に対応していない端末では「標準」のみが1件返る。
+     */
     @OptIn(ExperimentalCamera2Interop::class)
-    fun listBackCameraOptions(cameraProvider: ProcessCameraProvider): List<BackCameraOption> {
-        val backCameraInfos: List<CameraInfo> = cameraProvider.availableCameraInfos.filter {
-            CameraSelector.DEFAULT_BACK_CAMERA.filter(listOf(it)).isNotEmpty()
-        }
+    fun listZoomLensOptions(cameraProvider: ProcessCameraProvider): List<ZoomLensOption> {
+        val backInfo = cameraProvider.availableCameraInfos.firstOrNull { info ->
+            CameraSelector.DEFAULT_BACK_CAMERA.filter(listOf(info)).isNotEmpty()
+        } ?: return listOf(ZoomLensOption("標準", 1.0f))
 
-        return backCameraInfos.map { info ->
-            val camera2Info = Camera2CameraInfo.from(info)
-            val focalLengths = camera2Info.getCameraCharacteristic(
-                CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS
-            )
-            BackCameraOption(
-                cameraId = camera2Info.cameraId,
-                minFocalLengthMm = focalLengths?.minOrNull()
-            )
-        }.sortedBy { it.minFocalLengthMm ?: Float.MAX_VALUE }
-    }
+        val minZoomRatio = getMinZoomRatio(backInfo)
 
-    /** 表示用ラベル("広角"/"標準"/"望遠"等)を付けたリストを返す */
-    fun listBackCameraOptionsWithLabels(
-        cameraProvider: ProcessCameraProvider
-    ): List<Pair<BackCameraOption, String>> {
-        val options = listBackCameraOptions(cameraProvider)
-        return options.mapIndexed { index, option ->
-            val label = when {
-                options.size == 1 -> "標準"
-                index == 0 -> "広角"
-                index == options.size - 1 && options.size >= 3 -> "望遠"
-                else -> "標準"
-            }
-            option to label
+        val options = mutableListOf(ZoomLensOption("標準", 1.0f))
+        if (minZoomRatio != null && minZoomRatio < ULTRA_WIDE_THRESHOLD) {
+            options.add(0, ZoomLensOption("超広角", minZoomRatio))
         }
+        return options
     }
 
     @OptIn(ExperimentalCamera2Interop::class)
-    fun selectorForCameraId(cameraId: String): CameraSelector {
-        return CameraSelector.Builder()
-            .addCameraFilter { infos ->
-                infos.filter { Camera2CameraInfo.from(it).cameraId == cameraId }
-            }
-            .build()
+    private fun getMinZoomRatio(cameraInfo: androidx.camera.core.CameraInfo): Float? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null // API 30未満は非対応
+        return try {
+            val camera2Info = Camera2CameraInfo.from(cameraInfo)
+            val range = camera2Info.getCameraCharacteristic(
+                CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE
+            )
+            range?.lower
+        } catch (e: Exception) {
+            null
+        }
     }
 }

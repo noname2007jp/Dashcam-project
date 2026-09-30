@@ -17,7 +17,7 @@ class SettingsManager(context: Context) {
     companion object {
         private const val PREFS_NAME = "dashcam_settings"
         private const val KEY_SAVE_LOCATION_URI = "save_location_uri"
-        private const val KEY_PREFERRED_CAMERA_ID = "preferred_camera_id"
+        private const val KEY_PREFERRED_ZOOM_RATIO = "preferred_zoom_ratio"
     }
 
     /** SAFで選択した保存先フォルダのツリーURI。未設定ならnull。 */
@@ -31,10 +31,18 @@ class SettingsManager(context: Context) {
         prefs.edit().remove(KEY_SAVE_LOCATION_URI).apply()
     }
 
-    /** 選択された背面カメラのカメラID(camera2のID)。未設定(標準)ならnull。 */
-    var preferredCameraId: String?
-        get() = prefs.getString(KEY_PREFERRED_CAMERA_ID, null)
+    /** 選択されたレンズのズーム倍率(1.0未満なら超広角)。未設定(標準)ならnull。 */
+    var preferredZoomRatio: Float?
+        get() = if (prefs.contains(KEY_PREFERRED_ZOOM_RATIO)) {
+            prefs.getFloat(KEY_PREFERRED_ZOOM_RATIO, 1.0f)
+        } else {
+            null
+        }
         set(value) {
-            prefs.edit().putString(KEY_PREFERRED_CAMERA_ID, value).apply()
+            if (value == null) {
+                prefs.edit().remove(KEY_PREFERRED_ZOOM_RATIO).apply()
+            } else {
+                prefs.edit().putFloat(KEY_PREFERRED_ZOOM_RATIO, value).apply()
+            }
         }
 }

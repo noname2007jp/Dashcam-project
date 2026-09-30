@@ -2,6 +2,7 @@ package com.example.dashcam.export
 
 import android.content.ContentValues
 import android.content.Context
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.MediaStore
 import android.util.Log
@@ -26,6 +27,12 @@ class VideoExportManager(private val context: Context) {
     companion object {
         private const val TAG = "VideoExportManager"
         const val EXPORT_RELATIVE_PATH = "Download/cam/dashcam_export/"
+
+        // 元動画の情報取得に失敗した場合のみ使う既定値
+        private const val DEFAULT_WIDTH = 1920
+        private const val DEFAULT_HEIGHT = 1080
+        private const val DEFAULT_BIT_RATE = 8_000_000
+        private const val DEFAULT_FRAME_RATE = 30
     }
 
     sealed class Result {
@@ -52,6 +59,14 @@ class VideoExportManager(private val context: Context) {
         val muxedFile = File(tempDir, "muxed_${System.currentTimeMillis()}.mp4")
 
         try {
+            onProgress("元動画の情報を確認中")
+            val sourceInfo = readSourceVideoInfo(sourceVideoUri)
+            Log.i(
+                TAG,
+                "元動画情報: ${sourceInfo.width}x${sourceInfo.height}, " +
+                    "${sourceInfo.bitRate / 1_000_000}Mbps, ${sourceInfo.frameRate}fps"
+            )
+
             onProgress("メタデータを読み込み中")
             val samples = metadataJsonUri?.let { loadSamples(it) } ?: emptyList()
             val videoStartEpochMs = samples.firstOrNull()?.timestampMs
@@ -62,7 +77,11 @@ class VideoExportManager(private val context: Context) {
             val processor = VideoOverlayProcessor(
                 context = context,
                 sourceUri = sourceVideoUri,
-                resultFile = videoOnlyFile
+                resultFile = videoOnlyFile,
+                outputVideoWidth = sourceInfo.width,
+                outputVideoHeight = sourceInfo.height,
+                bitRate = sourceInfo.bitRate,
+                frameRate = sourceInfo.frameRate
             )
             processor.encode { timeMs ->
                 overlayRenderer.draw(this, timeMs)
@@ -88,6 +107,42 @@ class VideoExportManager(private val context: Context) {
         } finally {
             videoOnlyFile.delete()
             muxedFile.delete()
+        }
+    }
+
+    private data class SourceVideoInfo(
+        val width: Int,
+        val height: Int,
+        val bitRate: Int,
+        val frameRate: Int
+    )
+
+    /**
+     * 元動画の実際の解像度・ビットレート・フレームレートを読み取る。
+     * これを使わずに固定値でエンコードすると、元動画より低品質な出力になったり
+     * (ビットレートが元より低い場合)、逆に無駄にファイルサイズが増えたりする
+     * (ビットレートが元より高い場合)ため、必ず元動画の値に合わせる。
+     */
+    private fun readSourceVideoInfo(sourceUri: Uri): SourceVideoInfo {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(context, sourceUri)
+            val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+                ?.toIntOrNull() ?: DEFAULT_WIDTH
+            val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                ?.toIntOrNull() ?: DEFAULT_HEIGHT
+            val bitRate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)
+                ?.toIntOrNull()?.takeIf { it > 0 } ?: DEFAULT_BIT_RATE
+            val frameRate = retriever.extractMetadata(
+                MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE
+            )?.toFloatOrNull()?.toInt()?.takeIf { it > 0 } ?: DEFAULT_FRAME_RATE
+
+            SourceVideoInfo(width, height, bitRate, frameRate)
+        } catch (e: Exception) {
+            Log.e(TAG, "元動画の情報取得に失敗したため既定値を使用します", e)
+            SourceVideoInfo(DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_BIT_RATE, DEFAULT_FRAME_RATE)
+        } finally {
+            retriever.release()
         }
     }
 

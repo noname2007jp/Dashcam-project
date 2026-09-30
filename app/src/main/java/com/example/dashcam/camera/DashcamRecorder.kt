@@ -50,7 +50,7 @@ class DashcamRecorder(
     private val lifecycleOwner: LifecycleOwner,
     private val listener: Listener,
     private val motionDetector: MotionDetector? = null,
-    private val preferredCameraId: String? = null
+    private val preferredZoomRatio: Float? = null
 ) {
     interface Listener {
         /** 1セグメントの録画が正常に完了して保存されたときに呼ばれる */
@@ -133,9 +133,7 @@ class DashcamRecorder(
         videoCapture = VideoCapture.withOutput(recorder)
         preview = Preview.Builder().build()
 
-        val cameraSelector = preferredCameraId?.let {
-            CameraLensHelper.selectorForCameraId(it)
-        } ?: CameraSelector.DEFAULT_BACK_CAMERA // 未指定時は標準の背面カメラ
+        val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA // アウトカメラのみ
 
         // motionDetector が渡されている場合、動体検知用の低解像度フレームを
         // 供給する ImageAnalysis ユースケースも併せてバインドする
@@ -152,11 +150,18 @@ class DashcamRecorder(
 
         try {
             cameraProvider.unbindAll()
-            cameraProvider.bindToLifecycle(
+            val camera = cameraProvider.bindToLifecycle(
                 lifecycleOwner,
                 cameraSelector,
                 *useCases.toTypedArray()
             )
+            // 広角(超広角)レンズが選択されている場合、ズーム倍率を1.0未満に設定することで
+            // 端末が内部的に超広角レンズへ切り替える(Pixel等、レンズが別カメラIDとして
+            // 公開されていない機種向けの対応)
+            preferredZoomRatio?.let { ratio ->
+                camera.cameraControl.setZoomRatio(ratio)
+                Log.i(TAG, "ズーム倍率を設定しました: $ratio")
+            }
             Log.i(TAG, "カメラのバインドに成功しました(動体検知=${imageAnalysis != null})")
         } catch (e: Exception) {
             Log.e(TAG, "カメラのバインドに失敗しました", e)

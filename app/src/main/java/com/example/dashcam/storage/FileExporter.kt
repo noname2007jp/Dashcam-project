@@ -2,6 +2,7 @@ package com.example.dashcam.storage
 
 import android.content.Context
 import android.net.Uri
+import android.provider.DocumentsContract
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import java.util.concurrent.Executor
@@ -44,6 +45,15 @@ class FileExporter(private val context: Context) {
     ) {
         executor.execute {
             try {
+                if (isOverlappingWithDownloadsCam(destinationTreeUri)) {
+                    Log.e(
+                        TAG,
+                        "コピー先がDownload/camと重複しているためスキップします: $displayName " +
+                            "(設定画面で保存先フォルダを変更してください)"
+                    )
+                    return@execute
+                }
+
                 val rootDoc = DocumentFile.fromTreeUri(context, destinationTreeUri)
                 if (rootDoc == null || !rootDoc.canWrite()) {
                     Log.e(TAG, "保存先フォルダへの書き込み権限がありません")
@@ -74,6 +84,27 @@ class FileExporter(private val context: Context) {
             } catch (e: Exception) {
                 Log.e(TAG, "保存先フォルダへのコピーに失敗しました: $displayName", e)
             }
+        }
+    }
+
+    /**
+     * 指定フォルダが Download/cam と同じ場所、その内側、または外側で
+     * Download/cam を含んでしまう場所かどうかを判定する(簡易判定)。
+     * SettingsActivity側の選択時チェックと同じロジック(念のための二重防御)。
+     */
+    private fun isOverlappingWithDownloadsCam(uri: Uri): Boolean {
+        return try {
+            val docId = DocumentsContract.getTreeDocumentId(uri)
+            val normalized = docId.substringAfter(':', docId)
+                .replace('\\', '/')
+                .trim('/')
+            val target = "Download/cam"
+            normalized.equals(target, ignoreCase = true) ||
+                normalized.startsWith("$target/", ignoreCase = true) ||
+                target.startsWith("$normalized/", ignoreCase = true) ||
+                normalized.equals("Download", ignoreCase = true)
+        } catch (e: Exception) {
+            false
         }
     }
 }

@@ -99,9 +99,13 @@ Gradle Wrapperを同梱していないため、初回はAndroid Studioが自動�
 - `app/src/main/java/com/example/dashcam/SettingsActivity.kt`
   メイン画面右上の三本線メニューから遷移。
   - **追加コピー先フォルダ**: SAFで任意のフォルダを選ぶと、`Download/cam`への保存に加えて
-    そのフォルダへも自動コピーされる(例: 別のSDカードへのバックアップ用途)
-  - **使用レンズ**: 端末が複数の背面カメラ(広角等)を持つ場合、選択できる
-    (`CameraLensHelper`が焦点距離から簡易的に「広角/標準/望遠」ラベルを推定)
+    そのフォルダへも自動コピーされる(例: 別のSDカードへのバックアップ用途)。
+    **`Download/cam`自体や、その内側・外側で重複する場所は選択できない**
+    (同じファイルへコピーしようとしてエラーになるため、選択時とコピー実行時の両方で
+    チェックし、該当する場合は警告またはスキップする)
+  - **使用レンズ**: 端末が超広角に対応している場合、選択できる
+    (`CameraLensHelper`がズーム倍率の対応範囲から判定。Pixel等は広角/超広角が別カメラIDでは
+    なく1つの論理カメラのズーム倍率で切り替わる構成のため、この方式を採用)
 - `app/src/main/java/com/example/dashcam/storage/FileExporter.kt`
   追加コピー先フォルダ(SAF)へのコピー処理本体。`Download/cam`への保存自体は
   `DashcamRecorder`がMediaStore経由で直接行うため、これは追加ミラーのみを担当する
@@ -109,7 +113,7 @@ Gradle Wrapperを同梱していないため、初回はAndroid Studioが自動�
   MediaStoreクエリで`Download/cam`配下のファイルを管理(空き容量チェック・自動削除・
   保護フォルダの上限チェック)。ファイルシステムではなくMediaStoreを直接操作する
 - `app/src/main/java/com/example/dashcam/camera/CameraLensHelper.kt`
-  背面カメラの列挙・ラベル付け・CameraSelector生成
+  超広角レンズの対応判定(`CONTROL_ZOOM_RATIO_RANGE`、Android 11以降)とズーム倍率の選択肢生成
 - `app/src/main/java/com/example/dashcam/settings/SettingsManager.kt`
   設定の永続化(SharedPreferences)。追加コピー先フォルダURI・優先カメラIDを保持
 
@@ -166,6 +170,9 @@ Gradle Wrapperを同梱していないため、初回はAndroid Studioが自動�
 
 - OpenGL/MediaCodecまわりは実機でないと正しく動作するか検証できない(エミュレータでは
   不安定になりやすい)。**実機での動作確認が必須**
+- 出力の解像度・ビットレート・フレームレートは`MediaMetadataRetriever`で元動画から
+  実際の値を読み取り、それに合わせてエンコードする(固定値ではない)。取得に失敗した
+  場合のみ1920x1080・8Mbps・30fpsの既定値にフォールバックする
 - 処理時間はそこそこかかる(動画の長さ・端末性能次第)。現状はActivity内の
   コルーチンで実行しているため、Activityを閉じると処理が中断される可能性がある。
   本格的に使うならフォアグラウンドサービス化を検討すべき
@@ -173,6 +180,8 @@ Gradle Wrapperを同梱していないため、初回はAndroid Studioが自動�
   一般的なプレイヤーでは問題なく再生できるはずだが、シビアなストリーミング用途には
   不向き
 - メタデータが見つからない場合は、テキストなしでそのまま書き出される
+- 追加コピー先フォルダは`Download/cam`自体・その内側/外側と重複する場所を選べない
+  (選択時・実行時の両方でチェック)
 
 ## 未実装(今後追加予定)
 
