@@ -53,6 +53,13 @@ class DashcamRecorder(
     private val preferredZoomRatio: Float? = null
 ) {
     interface Listener {
+        /**
+         * 新しいセグメントの録画が始まったときに呼ばれる。
+         * メタデータ記録(MetadataRecorder)がこのタイミングで対応するファイルを
+         * 開始できるようにするためのフック。
+         */
+        fun onSegmentStarted(displayName: String)
+
         /** 1セグメントの録画が正常に完了して保存されたときに呼ばれる */
         fun onSegmentSaved(uri: Uri, displayName: String, durationMs: Long)
 
@@ -266,6 +273,7 @@ class DashcamRecorder(
         currentSegmentDisplayName = fileName
         currentSegmentUri = null
         segmentStartTimeMs = System.currentTimeMillis()
+        listener.onSegmentStarted(fileName)
 
         currentRecording = vc.output
             .prepareRecording(context, outputOptions)

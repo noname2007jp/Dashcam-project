@@ -34,13 +34,27 @@
             android:textAlignment="center"
             android:textSize="13sp" />
 
-        <Button
-            android:id="@+id/buttonStop"
+        <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="bottom|center_horizontal"
             android:layout_margin="16dp"
-            android:text="終了" />
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/buttonPauseResume"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="12dp"
+                android:text="一時停止" />
+
+            <Button
+                android:id="@+id/buttonStop"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="終了" />
+
+        </LinearLayout>
 
     </FrameLayout>
 

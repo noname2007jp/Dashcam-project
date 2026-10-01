@@ -27,7 +27,14 @@ class StorageManager(
     private val listener: Listener,
     private val autoDeleteThresholdPercent: Int = DEFAULT_AUTO_DELETE_THRESHOLD_PERCENT,
     private val stopThresholdPercent: Int = DEFAULT_STOP_THRESHOLD_PERCENT,
-    private val protectedMaxBytes: Long = DEFAULT_PROTECTED_MAX_BYTES
+    private val protectedMaxBytes: Long = DEFAULT_PROTECTED_MAX_BYTES,
+    /**
+     * ループ録画フォルダに使わせる最大容量(バイト)を返す関数。
+     * nullを返せば上限なし(空き容量パーセンテージによる制御のみ)。
+     * 設定変更をサービス再起動なしで反映できるよう、値そのものではなく
+     * 関数(都度読み出し)で受け取る。
+     */
+    private val maxLoopBytesProvider: () -> Long? = { null }
 ) {
     interface Listener {
         /** 自動削除を実行したときに呼ばれる */
@@ -73,6 +80,7 @@ class StorageManager(
             }
         }
 
+        enforceLoopCapacity()
         checkProtectedFolderSize()
     }
 
@@ -134,6 +142,65 @@ class StorageManager(
             }
         } catch (e: Exception) {
             Log.e(TAG, "自動削除中にエラーが発生しました", e)
+        }
+
+        if (deletedCount > 0) {
+            listener.onAutoDeleted(deletedCount, freedBytes)
+        }
+    }
+
+    /**
+     * ループ録画フォルダの合計サイズが、ユーザー設定の上限を超えていたら
+     * 古い順に削除して上限内に収める。上限が未設定(null)の場合は何もしない。
+     */
+    private fun enforceLoopCapacity() {
+        val maxBytes = maxLoopBytesProvider() ?: return
+        val resolver = context.contentResolver
+        val projection = arrayOf(
+            MediaStore.MediaColumns._ID,
+            MediaStore.MediaColumns.SIZE
+        )
+        val selection = "${MediaStore.MediaColumns.RELATIVE_PATH} = ?"
+        val selectionArgs = arrayOf(DashcamRecorder.LOOP_RELATIVE_PATH)
+        val sortOrder = "${MediaStore.MediaColumns.DATE_ADDED} ASC"
+
+        val items = mutableListOf<Pair<Long, Long>>() // id to size
+        var totalSize = 0L
+
+        try {
+            resolver.query(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                projection, selection, selectionArgs, sortOrder
+            )?.use { cursor ->
+                val idColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(idColumn)
+                    val size = cursor.getLong(sizeColumn)
+                    items.add(id to size)
+                    totalSize += size
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "容量上限チェック中にエラーが発生しました", e)
+            return
+        }
+
+        if (totalSize <= maxBytes) return
+
+        var deletedCount = 0
+        var freedBytes = 0L
+        for ((id, size) in items) {
+            if (totalSize <= maxBytes) break
+            val itemUri: Uri = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                .buildUpon().appendPath(id.toString()).build()
+            val rows = resolver.delete(itemUri, null, null)
+            if (rows > 0) {
+                deletedCount++
+                freedBytes += size
+                totalSize -= size
+                Log.i(TAG, "容量上限超過のため自動削除: id=$id (${size}bytes)")
+            }
         }
 
         if (deletedCount > 0) {

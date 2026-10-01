@@ -14,8 +14,8 @@ import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
-import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -24,11 +24,14 @@ import java.util.Locale
  * 録画中の日時・GPS位置・速度を記録するクラス(方式3: 映像には焼き込まず別ファイルに保存)。
  *
  * 設計方針:
- * - GPSから1秒間隔でサンプリングし、セグメント単位でメモリ上のバッファに貯める
- * - セグメント保存完了のタイミングで drainSamples() を呼び出してバッファを取り出し、
- *   動画と同じ相対パス・同じベースファイル名(拡張子のみ.json)でMediaStoreに保存する
- * - 将来実装する書き出し機能(MediaCodec+OpenGLでの焼き込み)がこのJSONを読み込んで使う想定
- * - GPSの位置測位ができていない場合でも、1秒ごとのタイムスタンプ自体は記録し続ける
+ * - GPSから1秒間隔でサンプリングし、そのたびにローカルの一時ファイルへ逐次追記する
+ *   (JSON Lines形式: 1行につき1サンプルのJSONオブジェクト)。
+ *   メモリ上にため込んでセグメント完了時にまとめて書き出す方式だと、アプリ強制終了時に
+ *   最大SEGMENT_DURATION_MS分のデータが失われるため、1秒ごとにディスクへ確実に書き込む。
+ * - セグメント開始時(DashcamRecorder.Listener.onSegmentStarted)に新しい一時ファイルを用意し、
+ *   セグメント完了時(onSegmentSaved/onProtectedSegmentSaved)にMediaStoreへアップロードして
+ *   一時ファイルを削除する
+ * - GPSの測位ができていない場合でも、1秒ごとのタイムスタンプ自体は記録し続ける
  *   (速度・位置はnullになるが、時系列の欠落を避けるため)
  */
 class MetadataRecorder(private val context: Context) {
@@ -44,6 +47,7 @@ class MetadataRecorder(private val context: Context) {
         private const val TAG = "MetadataRecorder"
         private const val SAMPLE_INTERVAL_MS = 1000L
         private const val LOCATION_UPDATE_INTERVAL_MS = 1000L
+        private const val TMP_DIR_NAME = "metadata_tmp"
 
         private val ISO_FORMAT =
             SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.JAPAN)
@@ -58,11 +62,16 @@ class MetadataRecorder(private val context: Context) {
     @Volatile
     private var lastLocation: Location? = null
 
-    private val samples = mutableListOf<Sample>()
-    private val samplesLock = Any()
-
     @Volatile
     private var isTracking = false
+
+    private val tmpDir: File by lazy {
+        File(context.cacheDir, TMP_DIR_NAME).apply { mkdirs() }
+    }
+
+    // 現在のセグメントに対応する一時ファイル(逐次追記先)
+    @Volatile
+    private var currentSegmentFile: File? = null
 
     private val locationCallback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
@@ -93,7 +102,61 @@ class MetadataRecorder(private val context: Context) {
         isTracking = false
         fusedLocationClient.removeLocationUpdates(locationCallback)
         cancelSampling()
+        currentSegmentFile = null
         Log.i(TAG, "メタデータ記録を停止しました")
+    }
+
+    /**
+     * 新しいセグメントの記録を開始する(DashcamRecorder.Listener.onSegmentStartedから呼ぶ)。
+     * 対応する一時ファイルを新規作成(空の状態)する。
+     */
+    fun startSegment(videoDisplayName: String) {
+        val baseName = videoDisplayName.substringBeforeLast('.')
+        val file = File(tmpDir, "$baseName.jsonl")
+        try {
+            file.writeText("") // 新規作成/既存なら空にする
+            currentSegmentFile = file
+        } catch (e: Exception) {
+            Log.e(TAG, "一時ファイルの作成に失敗しました: $baseName", e)
+            currentSegmentFile = null
+        }
+    }
+
+    /**
+     * セグメント完了時に呼ぶ。一時ファイルの内容をMediaStoreへアップロードし、
+     * 一時ファイルを削除する。videoDisplayNameと同じベース名の .json として保存する。
+     */
+    fun finalizeSegmentToMediaStore(videoDisplayName: String, relativePath: String) {
+        val file = currentSegmentFile
+        currentSegmentFile = null
+
+        if (file == null || !file.exists() || file.length() == 0L) {
+            return
+        }
+
+        val jsonName = videoDisplayName.substringBeforeLast('.') + ".json"
+        try {
+            val contentValues = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, jsonName)
+                put(MediaStore.MediaColumns.MIME_TYPE, "application/json")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+            }
+            val itemUri = context.contentResolver.insert(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues
+            )
+            if (itemUri == null) {
+                Log.e(TAG, "メタデータJSONの作成に失敗しました: $jsonName")
+                return
+            }
+            context.contentResolver.openOutputStream(itemUri)?.use { output ->
+                file.inputStream().use { input -> input.copyTo(output) }
+            }
+            Log.i(TAG, "メタデータ保存完了: $jsonName")
+        } catch (e: Exception) {
+            Log.e(TAG, "メタデータの保存に失敗しました: $jsonName", e)
+        } finally {
+            file.delete()
+        }
     }
 
     private fun scheduleSampling() {
@@ -127,68 +190,22 @@ class MetadataRecorder(private val context: Context) {
             longitude = location?.longitude,
             speedKmh = speedKmh
         )
-        synchronized(samplesLock) {
-            samples.add(sample)
-        }
+        appendSampleToCurrentFile(sample)
     }
 
-    /** バッファ中のサンプルを取り出し、バッファをクリアする(セグメント境界で呼ぶ想定) */
-    fun drainSamples(): List<Sample> {
-        synchronized(samplesLock) {
-            val copy = samples.toList()
-            samples.clear()
-            return copy
-        }
-    }
-
-    /**
-     * サンプル列をJSONとしてMediaStoreへ保存する。
-     * videoDisplayName(例: "2026-09-18_143207.mp4")と同じベース名の .json として、
-     * 動画と同じ相対パス(relativePath)に保存する。
-     */
-    fun saveSamplesToMediaStore(
-        samples: List<Sample>,
-        videoDisplayName: String,
-        relativePath: String
-    ) {
-        if (samples.isEmpty()) return
-
-        val jsonName = videoDisplayName.substringBeforeLast('.') + ".json"
-
+    private fun appendSampleToCurrentFile(sample: Sample) {
+        val file = currentSegmentFile ?: return // セグメント未開始中はサンプリングのみ行い記録しない
         try {
-            val jsonArray = JSONArray()
-            samples.forEach { s ->
-                val obj = JSONObject().apply {
-                    put("timestamp", ISO_FORMAT.format(Date(s.timestampMs)))
-                    put("timestamp_ms", s.timestampMs)
-                    put("latitude", s.latitude?.let { it } ?: JSONObject.NULL)
-                    put("longitude", s.longitude?.let { it } ?: JSONObject.NULL)
-                    put("speed_kmh", s.speedKmh?.let { it } ?: JSONObject.NULL)
-                }
-                jsonArray.put(obj)
+            val obj = JSONObject().apply {
+                put("timestamp", ISO_FORMAT.format(Date(sample.timestampMs)))
+                put("timestamp_ms", sample.timestampMs)
+                put("latitude", sample.latitude ?: JSONObject.NULL)
+                put("longitude", sample.longitude ?: JSONObject.NULL)
+                put("speed_kmh", sample.speedKmh ?: JSONObject.NULL)
             }
-
-            val contentValues = ContentValues().apply {
-                put(MediaStore.MediaColumns.DISPLAY_NAME, jsonName)
-                put(MediaStore.MediaColumns.MIME_TYPE, "application/json")
-                put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
-            }
-
-            val itemUri = context.contentResolver.insert(
-                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                contentValues
-            )
-            if (itemUri == null) {
-                Log.e(TAG, "メタデータJSONの作成に失敗しました: $jsonName")
-                return
-            }
-
-            context.contentResolver.openOutputStream(itemUri)?.use { output ->
-                output.write(jsonArray.toString(2).toByteArray(Charsets.UTF_8))
-            }
-            Log.i(TAG, "メタデータJSON保存完了: $jsonName (${samples.size}件)")
+            file.appendText(obj.toString() + "\n")
         } catch (e: Exception) {
-            Log.e(TAG, "メタデータJSONの保存に失敗しました: $jsonName", e)
+            Log.e(TAG, "メタデータの逐次書き込みに失敗しました", e)
         }
     }
 }

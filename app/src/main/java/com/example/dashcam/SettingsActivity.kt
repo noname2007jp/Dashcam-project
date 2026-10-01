@@ -4,9 +4,11 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.DocumentsContract
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.RadioButton
 import android.widget.RadioGroup
+import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -34,8 +36,19 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var textCurrentLocation: TextView
     private lateinit var textLensDescription: TextView
     private lateinit var radioGroupLens: RadioGroup
+    private lateinit var spinnerCapacity: Spinner
 
     private var lensOptions: List<CameraLensHelper.ZoomLensOption> = emptyList()
+
+    private val capacityOptions = listOf(
+        "無制限" to null,
+        "8GB" to 8,
+        "16GB" to 16,
+        "32GB" to 32,
+        "64GB" to 64,
+        "128GB" to 128,
+        "256GB" to 256
+    )
 
     private val folderPickerLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -100,6 +113,7 @@ class SettingsActivity : AppCompatActivity() {
         textCurrentLocation = findViewById(R.id.textCurrentLocation)
         textLensDescription = findViewById(R.id.textLensDescription)
         radioGroupLens = findViewById(R.id.radioGroupLens)
+        spinnerCapacity = findViewById(R.id.spinnerCapacity)
 
         findViewById<Button>(R.id.buttonChooseFolder).setOnClickListener {
             folderPickerLauncher.launch(null)
@@ -113,6 +127,34 @@ class SettingsActivity : AppCompatActivity() {
 
         updateCurrentLocationText()
         loadLensOptions()
+        setupCapacitySpinner()
+    }
+
+    private fun setupCapacitySpinner() {
+        spinnerCapacity.adapter = ArrayAdapter(
+            this, android.R.layout.simple_spinner_dropdown_item,
+            capacityOptions.map { it.first }
+        )
+
+        val currentGb = settingsManager.maxLoopStorageGb
+        val currentIndex = capacityOptions.indexOfFirst { it.second == currentGb }
+        spinnerCapacity.setSelection(if (currentIndex >= 0) currentIndex else 0)
+
+        spinnerCapacity.post {
+            spinnerCapacity.onItemSelectedListener =
+                object : android.widget.AdapterView.OnItemSelectedListener {
+                    override fun onItemSelected(
+                        parent: android.widget.AdapterView<*>?,
+                        view: android.view.View?,
+                        position: Int,
+                        id: Long
+                    ) {
+                        settingsManager.maxLoopStorageGb = capacityOptions[position].second
+                    }
+
+                    override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+                }
+        }
     }
 
     private fun updateCurrentLocationText() {

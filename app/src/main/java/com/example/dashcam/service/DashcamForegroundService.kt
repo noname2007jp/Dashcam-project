@@ -45,6 +45,8 @@ class DashcamForegroundService : LifecycleService() {
 
         const val ACTION_START = "com.example.dashcam.action.START"
         const val ACTION_STOP = "com.example.dashcam.action.STOP"
+        const val ACTION_PAUSE = "com.example.dashcam.action.PAUSE"
+        const val ACTION_RESUME = "com.example.dashcam.action.RESUME"
     }
 
     private var recorder: DashcamRecorder? = null
@@ -62,6 +64,13 @@ class DashcamForegroundService : LifecycleService() {
     // 駐車監視モード中かどうか(動体検知トリガー録画を有効にするかの判定に使う)
     @Volatile
     private var isParkingMode = false
+
+    // ユーザー操作による一時停止中かどうか(終了とは異なり、サービス自体は継続する)
+    @Volatile
+    private var isPausedByUser = false
+
+    /** 一時停止中かどうかを外部(MainActivity)から確認するための問い合わせ */
+    fun isPaused(): Boolean = isPausedByUser
 
     /**
      * MainActivityがこのServiceにバインドしてPreview映像を受け取れるようにするためのBinder。
@@ -98,19 +107,56 @@ class DashcamForegroundService : LifecycleService() {
                 stopRecordingAndSelf()
                 return START_NOT_STICKY
             }
+            ACTION_PAUSE -> {
+                pauseRecording()
+                return START_STICKY
+            }
+            ACTION_RESUME -> {
+                resumeRecording()
+                return START_STICKY
+            }
             else -> {
                 startForegroundWithNotification()
                 acquireWakeLock()
+                // MetadataRecorderはrecorderの最初のセグメント開始(onSegmentStarted)より
+                // 前に起動しておく必要があるため先に呼び出す
+                startMetadataRecorder()
                 startRecorder()
                 startShockDetector()
                 startTailgatingDetector()
                 startDrivingStateDetector()
-                startMetadataRecorder()
             }
         }
 
         // システムにkillされても可能な限り再起動してほしいので START_STICKY
         return START_STICKY
+    }
+
+    /**
+     * ユーザー操作による一時停止。録画のみ停止し、サービス・各種センサー・
+     * カメラのバインドは維持する(終了ボタンとは異なり、すぐ再開できる状態を保つ)。
+     * 書き出し等の操作をしている間、録画を止めておきたい場合に使う想定。
+     */
+    private fun pauseRecording() {
+        isPausedByUser = true
+        recorder?.stopRecording()
+        updateNotification("一時停止中")
+        Log.i(TAG, "ユーザー操作により一時停止しました")
+    }
+
+    private fun resumeRecording() {
+        isPausedByUser = false
+        when (drivingStateDetector?.getCurrentState()) {
+            DrivingStateDetector.State.PARKING -> {
+                // 駐車監視中は動体検知/衝撃検知が録画開始を判断するので、ここでは待機のみ
+                updateNotification("駐車監視中(待機)")
+            }
+            else -> {
+                recorder?.startLoopRecording()
+                updateNotification("走行中(常時録画中)")
+            }
+        }
+        Log.i(TAG, "録画を再開しました")
     }
 
     private fun startForegroundWithNotification() {
@@ -211,9 +257,13 @@ class DashcamForegroundService : LifecycleService() {
                             shockDetector?.setMode(ShockDetector.Mode.DRIVING)
                             tailgatingDetector?.setActive(true)
                             motionDetector?.reset()
-                            // 常時ループ録画を確実に開始/継続する
-                            recorder?.startLoopRecording()
-                            updateNotification("走行中(常時録画中)")
+                            // 一時停止中でなければ常時ループ録画を確実に開始/継続する
+                            if (!isPausedByUser) {
+                                recorder?.startLoopRecording()
+                                updateNotification("走行中(常時録画中)")
+                            } else {
+                                updateNotification("一時停止中(走行検知)")
+                            }
                         }
                         DrivingStateDetector.State.PARKING -> {
                             isParkingMode = true
@@ -251,6 +301,7 @@ class DashcamForegroundService : LifecycleService() {
             listener = object : TailgatingDetector.Listener {
                 override fun onTailgatingSuspected(eventCount: Int) {
                     Log.i(TAG, "煽り運転の可能性を検知(急ブレーキ${eventCount}回)")
+                    if (isPausedByUser) return
                     // 衝撃検知と同じ保護ロジックで前後のセグメントを保護対象にする
                     recorder?.markCurrentSegmentAsProtected()
                     updateNotification("煽り運転の可能性を検知しました(急ブレーキ${eventCount}回)")
@@ -278,6 +329,10 @@ class DashcamForegroundService : LifecycleService() {
             listener = object : ShockDetector.Listener {
                 override fun onShockDetected(magnitudeG: Float, mode: ShockDetector.Mode) {
                     Log.i(TAG, "衝撃検知イベント: ${"%.2f".format(magnitudeG)}G (mode=$mode)")
+                    if (isPausedByUser) {
+                        // 一時停止中は録画していないため保護対象もない
+                        return
+                    }
                     // 駐車監視中で、まだ動体検知による録画が始まっていない場合でも
                     // 衝撃検知自体をトリガーに録画を開始する(当て逃げ等の瞬間対策)
                     if (isParkingMode) {
@@ -306,6 +361,9 @@ class DashcamForegroundService : LifecycleService() {
 
         storageManager = StorageManager(
             context = this,
+            maxLoopBytesProvider = {
+                settingsManager.maxLoopStorageGb?.let { gb -> gb.toLong() * 1024 * 1024 * 1024 }
+            },
             listener = object : StorageManager.Listener {
                 override fun onAutoDeleted(deletedCount: Int, freedBytes: Long) {
                     Log.i(TAG, "自動削除: ${deletedCount}件 (${freedBytes}bytes解放)")
@@ -341,7 +399,7 @@ class DashcamForegroundService : LifecycleService() {
             listener = object : MotionDetector.Listener {
                 override fun onMotionDetected() {
                     Log.i(TAG, "動体検知: 録画を開始します")
-                    if (isParkingMode) {
+                    if (isParkingMode && !isPausedByUser) {
                         recorder?.startLoopRecording()
                         updateNotification("駐車監視中(動きを検知、録画中)")
                     }
@@ -363,12 +421,15 @@ class DashcamForegroundService : LifecycleService() {
             motionDetector = motionDetector,
             preferredZoomRatio = settingsManager.preferredZoomRatio,
             listener = object : DashcamRecorder.Listener {
+                override fun onSegmentStarted(displayName: String) {
+                    metadataRecorder?.startSegment(displayName)
+                }
+
                 override fun onSegmentSaved(uri: Uri, displayName: String, durationMs: Long) {
                     Log.i(TAG, "セグメント保存: $displayName")
                     storageManager?.checkAndManage()
-                    val samples = metadataRecorder?.drainSamples() ?: emptyList()
-                    metadataRecorder?.saveSamplesToMediaStore(
-                        samples, displayName, DashcamRecorder.LOOP_RELATIVE_PATH
+                    metadataRecorder?.finalizeSegmentToMediaStore(
+                        displayName, DashcamRecorder.LOOP_RELATIVE_PATH
                     )
                     settingsManager.saveLocationUri?.let { customUri ->
                         fileExporter.exportLoopSegment(customUri, uri, displayName)
@@ -383,9 +444,8 @@ class DashcamForegroundService : LifecycleService() {
                     Log.i(TAG, "保護セグメント保存: $displayName")
                     updateNotification("イベント映像を保護フォルダに保存しました")
                     storageManager?.checkAndManage()
-                    val samples = metadataRecorder?.drainSamples() ?: emptyList()
-                    metadataRecorder?.saveSamplesToMediaStore(
-                        samples, displayName, DashcamRecorder.PROTECTED_RELATIVE_PATH
+                    metadataRecorder?.finalizeSegmentToMediaStore(
+                        displayName, DashcamRecorder.PROTECTED_RELATIVE_PATH
                     )
                     settingsManager.saveLocationUri?.let { customUri ->
                         fileExporter.exportProtectedSegment(customUri, uri, displayName)

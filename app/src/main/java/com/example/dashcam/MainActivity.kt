@@ -39,12 +39,14 @@ class MainActivity : AppCompatActivity() {
     private var boundService: DashcamForegroundService? = null
     private var isBound = false
     private lateinit var previewView: PreviewView
+    private lateinit var buttonPauseResume: Button
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, service: IBinder) {
             val binder = service as DashcamForegroundService.LocalBinder
             boundService = binder.getService()
             attachPreview()
+            updatePauseButtonText()
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
@@ -92,6 +94,11 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.buttonStop).setOnClickListener {
             confirmAndStopDashcam()
+        }
+
+        buttonPauseResume = findViewById(R.id.buttonPauseResume)
+        buttonPauseResume.setOnClickListener {
+            togglePauseResume()
         }
 
         if (!hasAllPermissions()) {
@@ -163,6 +170,29 @@ class MainActivity : AppCompatActivity() {
 
     private fun attachPreview() {
         boundService?.attachPreviewSurfaceProvider(previewView.surfaceProvider)
+    }
+
+    /**
+     * 録画の一時停止/再開を切り替える。「終了」と違い、サービス自体は停止せず
+     * 録画のみ止める(書き出し作業中など、録画を一時的に止めたいときに使う想定)。
+     */
+    private fun togglePauseResume() {
+        val service = boundService ?: return
+        // startService()は非同期のため、呼び出し前の状態を基準に次の表示を決める
+        val wasPaused = service.isPaused()
+        val intent = Intent(this, DashcamForegroundService::class.java).apply {
+            action = if (wasPaused) {
+                DashcamForegroundService.ACTION_RESUME
+            } else {
+                DashcamForegroundService.ACTION_PAUSE
+            }
+        }
+        startService(intent)
+        buttonPauseResume.text = if (wasPaused) "一時停止" else "再開"
+    }
+
+    private fun updatePauseButtonText() {
+        buttonPauseResume.text = if (boundService?.isPaused() == true) "再開" else "一時停止"
     }
 
     /** 誤操作防止のため確認ダイアログを出してから録画を終了する */

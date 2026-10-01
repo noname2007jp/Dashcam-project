@@ -146,24 +146,48 @@ class VideoExportManager(private val context: Context) {
         }
     }
 
+    /**
+     * メタデータJSONを読み込む。
+     * 現在の形式は JSON Lines(1行1サンプルのJSONオブジェクト、MetadataRecorderが
+     * 1秒ごとに逐次追記する形式)。念のため、旧形式(JSON配列をまとめて書き出す形式)
+     * のファイルも読めるようフォールバックを用意している。
+     */
     private fun loadSamples(metadataJsonUri: Uri): List<MetadataRecorder.Sample> {
         return try {
             val text = context.contentResolver.openInputStream(metadataJsonUri)
                 ?.bufferedReader()?.use { it.readText() } ?: return emptyList()
-            val jsonArray = JSONArray(text)
-            (0 until jsonArray.length()).map { i ->
-                val obj = jsonArray.getJSONObject(i)
-                MetadataRecorder.Sample(
-                    timestampMs = obj.getLong("timestamp_ms"),
-                    latitude = if (obj.isNull("latitude")) null else obj.getDouble("latitude"),
-                    longitude = if (obj.isNull("longitude")) null else obj.getDouble("longitude"),
-                    speedKmh = if (obj.isNull("speed_kmh")) null else obj.getDouble("speed_kmh").toFloat()
-                )
+            val trimmed = text.trim()
+            if (trimmed.isEmpty()) {
+                emptyList()
+            } else if (trimmed.startsWith("[")) {
+                // 旧形式(JSON配列)
+                val jsonArray = JSONArray(trimmed)
+                (0 until jsonArray.length()).mapNotNull { i ->
+                    parseSample(jsonArray.optJSONObject(i))
+                }
+            } else {
+                // 現行形式(JSON Lines)
+                trimmed.lineSequence()
+                    .filter { it.isNotBlank() }
+                    .mapNotNull { line ->
+                        runCatching { parseSample(org.json.JSONObject(line)) }.getOrNull()
+                    }
+                    .toList()
             }
         } catch (e: Exception) {
             Log.e(TAG, "メタデータJSONの読み込みに失敗しました", e)
             emptyList()
         }
+    }
+
+    private fun parseSample(obj: org.json.JSONObject?): MetadataRecorder.Sample? {
+        obj ?: return null
+        return MetadataRecorder.Sample(
+            timestampMs = obj.getLong("timestamp_ms"),
+            latitude = if (obj.isNull("latitude")) null else obj.getDouble("latitude"),
+            longitude = if (obj.isNull("longitude")) null else obj.getDouble("longitude"),
+            speedKmh = if (obj.isNull("speed_kmh")) null else obj.getDouble("speed_kmh").toFloat()
+        )
     }
 
     private fun saveToMediaStore(file: File, displayName: String): Uri? {

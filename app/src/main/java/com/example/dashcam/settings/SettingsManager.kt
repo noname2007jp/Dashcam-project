@@ -18,6 +18,7 @@ class SettingsManager(context: Context) {
         private const val PREFS_NAME = "dashcam_settings"
         private const val KEY_SAVE_LOCATION_URI = "save_location_uri"
         private const val KEY_PREFERRED_ZOOM_RATIO = "preferred_zoom_ratio"
+        private const val KEY_MAX_LOOP_STORAGE_GB = "max_loop_storage_gb"
     }
 
     /** SAFで選択した保存先フォルダのツリーURI。未設定ならnull。 */
@@ -43,6 +44,21 @@ class SettingsManager(context: Context) {
                 prefs.edit().remove(KEY_PREFERRED_ZOOM_RATIO).apply()
             } else {
                 prefs.edit().putFloat(KEY_PREFERRED_ZOOM_RATIO, value).apply()
+            }
+        }
+
+    /** ループ録画フォルダに使わせる容量上限(GB単位)。未設定(無制限)ならnull。 */
+    var maxLoopStorageGb: Int?
+        get() = if (prefs.contains(KEY_MAX_LOOP_STORAGE_GB)) {
+            prefs.getInt(KEY_MAX_LOOP_STORAGE_GB, 0)
+        } else {
+            null
+        }
+        set(value) {
+            if (value == null) {
+                prefs.edit().remove(KEY_MAX_LOOP_STORAGE_GB).apply()
+            } else {
+                prefs.edit().putInt(KEY_MAX_LOOP_STORAGE_GB, value).apply()
             }
         }
 }
