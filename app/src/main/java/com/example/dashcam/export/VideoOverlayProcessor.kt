@@ -57,10 +57,27 @@ class VideoOverlayProcessor(
         val videoWidth = format.getInteger(MediaFormat.KEY_WIDTH)
         val videoHeight = format.getInteger(MediaFormat.KEY_HEIGHT)
 
-        // 縦動画は回転情報が入っていることがあるため考慮する
-        val hasRotation = runCatching { format.getInteger(MediaFormat.KEY_ROTATION) }.getOrNull() == 90
-        val originVideoWidth = if (hasRotation) videoHeight else videoWidth
-        val originVideoHeight = if (hasRotation) videoWidth else videoHeight
+        // 回転情報が入っていることがあるため考慮する(0/90/180/270度すべてに対応)
+        val rotationDegrees = runCatching { format.getInteger(MediaFormat.KEY_ROTATION) }
+            .getOrDefault(0)
+        val originVideoWidth = if (rotationDegrees == 90 || rotationDegrees == 270) {
+            videoHeight
+        } else {
+            videoWidth
+        }
+        val originVideoHeight = if (rotationDegrees == 90 || rotationDegrees == 270) {
+            videoWidth
+        } else {
+            videoHeight
+        }
+        // デコードされたフレームの回転を打ち消すための補正角度
+        // (90度回転されているソースは270度回転させて打ち消す、等)
+        val compensationDegrees = when (rotationDegrees) {
+            90 -> 270f
+            180 -> 180f
+            270 -> 90f
+            else -> 0f
+        }
 
         val encodeMediaCodec = MediaCodec.createEncoderByType(videoMimeType).apply {
             val videoFormat = MediaFormat.createVideoFormat(
@@ -84,7 +101,7 @@ class VideoOverlayProcessor(
                 outputVideoHeight = outputVideoHeight,
                 originVideoWidth = originVideoWidth,
                 originVideoHeight = originVideoHeight,
-                videoRotationDegrees = if (hasRotation) 270f else 0f
+                videoRotationDegrees = compensationDegrees
             )
         )
         codecInputSurface.makeCurrent()

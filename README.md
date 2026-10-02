@@ -176,6 +176,21 @@ Gradle Wrapperを同梱していないため、初回はAndroid Studioが自動�
 4. 元動画から音声トラックを抜き出し、映像のみのファイルとストリームコピーで合成
 5. 完成したmp4を`Download/cam/dashcam_export/`へMediaStore経由で保存
 
+### 修正履歴(2026-10時点)
+
+- **GPS/速度の取得方式**: `location.hasSpeed()`→`location.getSpeed() * 3.6f`(m/s→km/h)という
+  標準的な方式で取得しており、方式自体に問題はないことを確認済み。ただし**Android 14以降の
+  端末でGPSの継続取得が不安定になりうる設定不備**を発見し修正(下記参照)
+- **位置情報のforegroundServiceType不足**: `AndroidManifest.xml`の`<service>`定義と
+  `startForeground()`呼び出しに`location`タイプが指定されておらず、カメラ用途の
+  `camera`タイプのみだった。Android 14以降はこれが原因で裏側でのGPS更新が制限される
+  可能性があるため、`camera|location`に修正し、`FOREGROUND_SERVICE_LOCATION`権限も追加した
+- **書き出し時のテキスト向きのズレ**: `VideoExportManager`が元動画の幅・高さを
+  `MediaMetadataRetriever`から取得する際、回転情報(`METADATA_KEY_VIDEO_ROTATION`)を
+  考慮していなかったため、90度/270度回転の動画でテキスト描画用Canvasの縦横が
+  実際の映像の向きと食い違っていた。回転情報を読み取って幅・高さを補正するよう修正
+  (`VideoOverlayProcessor`側の回転補正も90度専用だったものを0/90/180/270度すべてに対応するよう汎用化)
+
 ### 既知の制約・注意点
 
 - OpenGL/MediaCodecまわりは実機でないと正しく動作するか検証できない(エミュレータでは

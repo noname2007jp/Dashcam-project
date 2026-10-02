@@ -122,20 +122,43 @@ class VideoExportManager(private val context: Context) {
      * これを使わずに固定値でエンコードすると、元動画より低品質な出力になったり
      * (ビットレートが元より低い場合)、逆に無駄にファイルサイズが増えたりする
      * (ビットレートが元より高い場合)ため、必ず元動画の値に合わせる。
+     *
+     * 重要: MediaMetadataRetrieverのWIDTH/HEIGHTは「コーディングされた生の幅・高さ」であり、
+     * 回転情報(METADATA_KEY_VIDEO_ROTATION)を反映していない。90度/270度回転の動画では
+     * 幅と高さが実際の表示状態と入れ替わっているため、ここで補正しておかないと、
+     * 出力Canvas(=テキスト描画先)の縦横が映像の実際の向きと食い違い、
+     * 「映像は正しい向きなのにテキストだけ90度ずれる」といった不具合の原因になる。
      */
     private fun readSourceVideoInfo(sourceUri: Uri): SourceVideoInfo {
         val retriever = MediaMetadataRetriever()
         return try {
             retriever.setDataSource(context, sourceUri)
-            val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+            val rawWidth = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
                 ?.toIntOrNull() ?: DEFAULT_WIDTH
-            val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+            val rawHeight = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
                 ?.toIntOrNull() ?: DEFAULT_HEIGHT
+            val rotation = retriever.extractMetadata(
+                MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION
+            )?.toIntOrNull() ?: 0
+
+            // 90度/270度回転の場合、実際の表示上の幅・高さは入れ替わる
+            val (width, height) = if (rotation == 90 || rotation == 270) {
+                rawHeight to rawWidth
+            } else {
+                rawWidth to rawHeight
+            }
+
             val bitRate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)
                 ?.toIntOrNull()?.takeIf { it > 0 } ?: DEFAULT_BIT_RATE
             val frameRate = retriever.extractMetadata(
                 MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE
             )?.toFloatOrNull()?.toInt()?.takeIf { it > 0 } ?: DEFAULT_FRAME_RATE
+
+            Log.i(
+                TAG,
+                "元動画の回転情報: ${rotation}度 (生の解像度 ${rawWidth}x${rawHeight} " +
+                    "-> 補正後 ${width}x${height})"
+            )
 
             SourceVideoInfo(width, height, bitRate, frameRate)
         } catch (e: Exception) {
