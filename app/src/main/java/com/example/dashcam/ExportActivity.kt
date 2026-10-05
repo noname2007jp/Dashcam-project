@@ -33,6 +33,7 @@ class ExportActivity : AppCompatActivity() {
     private lateinit var checkLocation: CheckBox
     private lateinit var checkSpeed: CheckBox
     private lateinit var spinnerPosition: Spinner
+    private lateinit var spinnerOrientation: Spinner
 
     private var selectedVideoUri: Uri? = null
     private var selectedVideoDisplayName: String? = null
@@ -42,6 +43,12 @@ class ExportActivity : AppCompatActivity() {
         "右上" to ExportOptions.Position.TOP_RIGHT,
         "左下" to ExportOptions.Position.BOTTOM_LEFT,
         "右下" to ExportOptions.Position.BOTTOM_RIGHT
+    )
+
+    // 書き出し動画の向き。デフォルトは横向き(ドラレコ映像の標準的な向き)
+    private val orientationOptions = listOf(
+        "横向き" to ExportOptions.Orientation.LANDSCAPE,
+        "縦向き" to ExportOptions.Orientation.PORTRAIT
     )
 
     private val videoPickerLauncher = registerForActivityResult(
@@ -67,6 +74,7 @@ class ExportActivity : AppCompatActivity() {
         checkLocation = findViewById(R.id.checkLocation)
         checkSpeed = findViewById(R.id.checkSpeed)
         spinnerPosition = findViewById(R.id.spinnerPosition)
+        spinnerOrientation = findViewById(R.id.spinnerOrientation)
 
         spinnerPosition.adapter = ArrayAdapter(
             this, android.R.layout.simple_spinner_dropdown_item,
@@ -74,6 +82,13 @@ class ExportActivity : AppCompatActivity() {
         )
         // デフォルトは左下
         spinnerPosition.setSelection(positionOptions.indexOfFirst { it.second == ExportOptions.Position.BOTTOM_LEFT })
+
+        spinnerOrientation.adapter = ArrayAdapter(
+            this, android.R.layout.simple_spinner_dropdown_item,
+            orientationOptions.map { it.first }
+        )
+        // デフォルトは横向き
+        spinnerOrientation.setSelection(0)
 
         findViewById<Button>(R.id.buttonPickVideo).setOnClickListener {
             videoPickerLauncher.launch(arrayOf("video/mp4"))
@@ -118,7 +133,8 @@ class ExportActivity : AppCompatActivity() {
             showDate = checkDate.isChecked,
             showLocation = checkLocation.isChecked,
             showSpeed = checkSpeed.isChecked,
-            position = positionOptions[spinnerPosition.selectedItemPosition].second
+            position = positionOptions[spinnerPosition.selectedItemPosition].second,
+            orientation = orientationOptions[spinnerOrientation.selectedItemPosition].second
         )
 
         buttonExport.isEnabled = false

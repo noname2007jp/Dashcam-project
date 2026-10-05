@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.os.IBinder
 import android.view.Menu
 import android.view.MenuItem
+import android.view.View
 import android.widget.Button
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -39,7 +40,10 @@ class MainActivity : AppCompatActivity() {
     private var boundService: DashcamForegroundService? = null
     private var isBound = false
     private lateinit var previewView: PreviewView
+    private lateinit var toolbar: Toolbar
+    private lateinit var buttonStart: Button
     private lateinit var buttonPauseResume: Button
+    private lateinit var buttonStop: Button
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, service: IBinder) {
@@ -47,6 +51,7 @@ class MainActivity : AppCompatActivity() {
             boundService = binder.getService()
             attachPreview()
             updatePauseButtonText()
+            updateUiForRecordingState()
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
@@ -73,8 +78,9 @@ class MainActivity : AppCompatActivity() {
     ) { results ->
         val allGranted = results.values.all { it }
         if (allGranted) {
-            startDashcamService()
-            if (!isBound) bindToDashcamService()
+            // 権限が揃っても自動では録画を開始しない。
+            // ユーザーが「録画開始」ボタンを押したときに開始する
+            updateUiForRecordingState()
         } else {
             Toast.makeText(
                 this,
@@ -88,15 +94,36 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        val toolbar = findViewById<Toolbar>(R.id.toolbar)
+        toolbar = findViewById(R.id.toolbar)
         setSupportActionBar(toolbar)
         previewView = findViewById(R.id.previewView)
 
-        findViewById<Button>(R.id.buttonStop).setOnClickListener {
+        buttonStart = findViewById(R.id.buttonStart)
+        buttonStop = findViewById(R.id.buttonStop)
+        buttonPauseResume = findViewById(R.id.buttonPauseResume)
+
+        // プレビューをタップすると、上部のバー(Dashcam表示・メニュー)を表示/非表示切り替え
+        previewView.setOnClickListener {
+            toolbar.visibility = if (toolbar.visibility == View.VISIBLE) {
+                View.GONE
+            } else {
+                View.VISIBLE
+            }
+        }
+
+        // 起動時は自動開始せず、「録画開始」ボタンで明示的に開始する
+        buttonStart.setOnClickListener {
+            if (hasAllPermissions()) {
+                startDashcam()
+            } else {
+                permissionLauncher.launch(requiredPermissions)
+            }
+        }
+
+        buttonStop.setOnClickListener {
             confirmAndStopDashcam()
         }
 
-        buttonPauseResume = findViewById(R.id.buttonPauseResume)
         buttonPauseResume.setOnClickListener {
             togglePauseResume()
         }
@@ -104,15 +131,34 @@ class MainActivity : AppCompatActivity() {
         if (!hasAllPermissions()) {
             permissionLauncher.launch(requiredPermissions)
         }
-        // 権限が既にある場合の起動・バインドは onStart() に任せる
+        updateUiForRecordingState()
     }
 
     override fun onStart() {
         super.onStart()
-        if (hasAllPermissions()) {
-            startDashcamService()
-            if (!isBound) bindToDashcamService()
+        // サービスが既に動いている場合(設定画面から戻ってきた等)だけ再バインドする。
+        // 自動的な録画開始は行わない(開始ボタン操作を必須にするため)
+        if (hasAllPermissions() && DashcamForegroundService.isServiceActive && !isBound) {
+            bindToDashcamService()
         }
+        updateUiForRecordingState()
+    }
+
+    /**
+     * 録画(サービス)の稼働状態に応じてボタンの表示を切り替える。
+     * 未起動: 「録画開始」のみ表示 / 稼働中: 一時停止・終了を表示
+     */
+    private fun updateUiForRecordingState() {
+        val active = DashcamForegroundService.isServiceActive
+        buttonStart.visibility = if (active) View.GONE else View.VISIBLE
+        buttonPauseResume.visibility = if (active) View.VISIBLE else View.GONE
+        buttonStop.visibility = if (active) View.VISIBLE else View.GONE
+    }
+
+    private fun startDashcam() {
+        startDashcamService()
+        if (!isBound) bindToDashcamService()
+        updateUiForRecordingState()
     }
 
     override fun onStop() {

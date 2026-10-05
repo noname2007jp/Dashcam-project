@@ -18,6 +18,8 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import com.example.dashcam.camera.CameraLensHelper
+import com.example.dashcam.sensor.ShockDetector
+import com.example.dashcam.sensor.TailgatingDetector
 import com.example.dashcam.settings.SettingsManager
 
 /**
@@ -37,6 +39,9 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var textLensDescription: TextView
     private lateinit var radioGroupLens: RadioGroup
     private lateinit var spinnerCapacity: Spinner
+    private lateinit var spinnerShockDriving: Spinner
+    private lateinit var spinnerShockParking: Spinner
+    private lateinit var spinnerTailgating: Spinner
 
     private var lensOptions: List<CameraLensHelper.ZoomLensOption> = emptyList()
 
@@ -114,6 +119,9 @@ class SettingsActivity : AppCompatActivity() {
         textLensDescription = findViewById(R.id.textLensDescription)
         radioGroupLens = findViewById(R.id.radioGroupLens)
         spinnerCapacity = findViewById(R.id.spinnerCapacity)
+        spinnerShockDriving = findViewById(R.id.spinnerShockDriving)
+        spinnerShockParking = findViewById(R.id.spinnerShockParking)
+        spinnerTailgating = findViewById(R.id.spinnerTailgating)
 
         findViewById<Button>(R.id.buttonChooseFolder).setOnClickListener {
             folderPickerLauncher.launch(null)
@@ -128,6 +136,80 @@ class SettingsActivity : AppCompatActivity() {
         updateCurrentLocationText()
         loadLensOptions()
         setupCapacitySpinner()
+        setupThresholdSpinners()
+    }
+
+    /**
+     * 検知閾値のスピナーを初期化する。0.1G刻みの選択肢を用意し、
+     * 選択内容をSharedPreferencesへ永続化する。
+     * 反映タイミングは録画(サービス)起動時。
+     */
+    private fun setupThresholdSpinners() {
+        setupThresholdSpinner(
+            spinnerShockDriving,
+            thresholdOptions(ShockDetector.MIN_THRESHOLD_G, ShockDetector.MAX_THRESHOLD_G),
+            settingsManager.shockDrivingThresholdG
+        ) { value ->
+            settingsManager.shockDrivingThresholdG = value
+        }
+        setupThresholdSpinner(
+            spinnerShockParking,
+            thresholdOptions(ShockDetector.MIN_THRESHOLD_G, ShockDetector.MAX_THRESHOLD_G),
+            settingsManager.shockParkingThresholdG
+        ) { value ->
+            settingsManager.shockParkingThresholdG = value
+        }
+        setupThresholdSpinner(
+            spinnerTailgating,
+            thresholdOptions(TailgatingDetector.MIN_THRESHOLD_G, TailgatingDetector.MAX_THRESHOLD_G),
+            settingsManager.tailgatingBrakingThresholdG
+        ) { value ->
+            settingsManager.tailgatingBrakingThresholdG = value
+        }
+    }
+
+    /** min〜maxを0.1G刻みで並べた選択肢を作る */
+    private fun thresholdOptions(min: Float, max: Float): List<Float> {
+        val options = mutableListOf<Float>()
+        var value = min
+        while (value <= max + 0.001f) {
+            options.add(Math.round(value * 10f) / 10f)
+            value += 0.1f
+        }
+        return options
+    }
+
+    private fun setupThresholdSpinner(
+        spinner: Spinner,
+        values: List<Float>,
+        currentValue: Float,
+        onSelected: (Float) -> Unit
+    ) {
+        spinner.adapter = ArrayAdapter(
+            this, android.R.layout.simple_spinner_dropdown_item,
+            values.map { "%.1fG".format(it) }
+        )
+        val currentIndex = values.indexOfFirst { Math.abs(it - currentValue) < 0.05f }
+        spinner.setSelection(if (currentIndex >= 0) currentIndex else 0)
+        spinner.post {
+            spinner.onItemSelectedListener =
+                object : android.widget.AdapterView.OnItemSelectedListener {
+                    override fun onItemSelected(
+                        parent: android.widget.AdapterView<*>?,
+                        view: android.view.View?,
+                        position: Int,
+                        id: Long
+                    ) {
+                        val value = values[position]
+                        if (Math.abs(value - currentValue) > 0.001f) {
+                            onSelected(value)
+                            Toast.makeText(this@SettingsActivity, "閾値を保存しました(次回の録画開始時に反映)", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+
+                    override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+                }
+        }
     }
 
     private fun setupCapacitySpinner() {

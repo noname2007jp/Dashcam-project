@@ -74,14 +74,30 @@ class VideoExportManager(private val context: Context) {
             val overlayRenderer = OverlayTextRenderer(samples, videoStartEpochMs, options)
 
             onProgress("映像にテキストを焼き込み中")
+
+            // 書き出しの向き指定(横/縦)。録画時に向きが固定されてしまった動画でも、
+            // ここで90度回転させて指定した向きに出力する。デフォルトは横向き。
+            val sourceIsLandscape = sourceInfo.width >= sourceInfo.height
+            val wantLandscape = options.orientation == ExportOptions.Orientation.LANDSCAPE
+            var outputWidth = sourceInfo.width
+            var outputHeight = sourceInfo.height
+            var extraRotation = 0f
+            if (sourceIsLandscape != wantLandscape) {
+                outputWidth = sourceInfo.height
+                outputHeight = sourceInfo.width
+                extraRotation = 90f
+                Log.i(TAG, "書き出し時に向きを変更します: ${options.orientation} (90度回転)")
+            }
+
             val processor = VideoOverlayProcessor(
                 context = context,
                 sourceUri = sourceVideoUri,
                 resultFile = videoOnlyFile,
-                outputVideoWidth = sourceInfo.width,
-                outputVideoHeight = sourceInfo.height,
+                outputVideoWidth = outputWidth,
+                outputVideoHeight = outputHeight,
                 bitRate = sourceInfo.bitRate,
-                frameRate = sourceInfo.frameRate
+                frameRate = sourceInfo.frameRate,
+                extraRotationDegrees = extraRotation
             )
             processor.encode { timeMs ->
                 overlayRenderer.draw(this, timeMs)

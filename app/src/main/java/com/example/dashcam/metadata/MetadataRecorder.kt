@@ -1,6 +1,7 @@
 package com.example.dashcam.metadata
 
 import android.annotation.SuppressLint
+import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.location.Location
@@ -8,6 +9,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import android.util.Log
+import com.example.dashcam.camera.DashcamRecorder
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
@@ -156,6 +158,47 @@ class MetadataRecorder(private val context: Context) {
             Log.e(TAG, "メタデータの保存に失敗しました: $jsonName", e)
         } finally {
             file.delete()
+        }
+    }
+
+    /**
+     * 保存済みのメタデータJSONを、保護フォルダへ移動する。
+     * ループ録画フォルダ(Download/cam/dashcam_loop)に保存された動画と同じベース名の
+     * .jsonを探し、MediaStoreのRELATIVE_PATH更新によって保護フォルダへ移動する。
+     * (動画側の移動と同時に行うことで、メタデータがループフォルダに取り残されるのを防ぐ)
+     */
+    fun moveMetadataToProtected(videoDisplayName: String) {
+        val jsonName = videoDisplayName.substringBeforeLast('.') + ".json"
+        try {
+            val projection = arrayOf(MediaStore.MediaColumns._ID)
+            val selection =
+                "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND " +
+                    "${MediaStore.MediaColumns.RELATIVE_PATH} = ?"
+            val selectionArgs = arrayOf(jsonName, DashcamRecorder.LOOP_RELATIVE_PATH)
+
+            context.contentResolver.query(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                projection, selection, selectionArgs, null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val id = cursor.getLong(
+                        cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                    )
+                    val uri = ContentUris.withAppendedId(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI, id
+                    )
+                    val values = ContentValues().apply {
+                        put(MediaStore.MediaColumns.RELATIVE_PATH,
+                            DashcamRecorder.PROTECTED_RELATIVE_PATH)
+                    }
+                    val updated = context.contentResolver.update(uri, values, null, null)
+                    if (updated > 0) {
+                        Log.i(TAG, "メタデータJSONを保護フォルダへ移動: $jsonName")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "メタデータJSONの移動に失敗しました: $jsonName", e)
         }
     }
 

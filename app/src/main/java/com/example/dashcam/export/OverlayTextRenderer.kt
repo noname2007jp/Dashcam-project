@@ -14,9 +14,17 @@ data class ExportOptions(
     val showDate: Boolean = true,
     val showLocation: Boolean = true,
     val showSpeed: Boolean = true,
-    val position: Position = Position.BOTTOM_LEFT
+    val position: Position = Position.BOTTOM_LEFT,
+    val orientation: Orientation = Orientation.LANDSCAPE
 ) {
     enum class Position { TOP_LEFT, TOP_RIGHT, BOTTOM_LEFT, BOTTOM_RIGHT }
+
+    /**
+     * 書き出し動画の向き。録画時に向きが固定されてしまった動画でも、
+     * 書き出し時に指定した向きへ回転させる。
+     * デフォルトはドラレコ映像として一般的な横向き(LANDSCAPE)。
+     */
+    enum class Orientation { LANDSCAPE, PORTRAIT }
 }
 
 /**

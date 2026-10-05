@@ -19,6 +19,11 @@ class SettingsManager(context: Context) {
         private const val KEY_SAVE_LOCATION_URI = "save_location_uri"
         private const val KEY_PREFERRED_ZOOM_RATIO = "preferred_zoom_ratio"
         private const val KEY_MAX_LOOP_STORAGE_GB = "max_loop_storage_gb"
+
+        // 検知閾値(G)。未設定時のデフォルト値は各Detectorの既定値と一致させる
+        private const val KEY_SHOCK_DRIVING_G = "shock_driving_threshold_g"
+        private const val KEY_SHOCK_PARKING_G = "shock_parking_threshold_g"
+        private const val KEY_TAILGATING_G = "tailgating_braking_threshold_g"
     }
 
     /** SAFで選択した保存先フォルダのツリーURI。未設定ならnull。 */
@@ -60,5 +65,28 @@ class SettingsManager(context: Context) {
             } else {
                 prefs.edit().putInt(KEY_MAX_LOOP_STORAGE_GB, value).apply()
             }
+        }
+
+    // ==== 検知閾値(0.1G刻みで調整可能。設定画面のスピナーから変更する) ====
+
+    /** 衝撃検知: 走行中の閾値(G)。既定0.5G */
+    var shockDrivingThresholdG: Float
+        get() = prefs.getFloat(KEY_SHOCK_DRIVING_G, 0.5f)
+        set(value) {
+            prefs.edit().putFloat(KEY_SHOCK_DRIVING_G, value).apply()
+        }
+
+    /** 衝撃検知: 駐車監視中の閾値(G)。既定0.2G */
+    var shockParkingThresholdG: Float
+        get() = prefs.getFloat(KEY_SHOCK_PARKING_G, 0.2f)
+        set(value) {
+            prefs.edit().putFloat(KEY_SHOCK_PARKING_G, value).apply()
+        }
+
+    /** 煽り運転検知(急ブレーキ)の閾値(G)。既定0.3G */
+    var tailgatingBrakingThresholdG: Float
+        get() = prefs.getFloat(KEY_TAILGATING_G, 0.3f)
+        set(value) {
+            prefs.edit().putFloat(KEY_TAILGATING_G, value).apply()
         }
 }

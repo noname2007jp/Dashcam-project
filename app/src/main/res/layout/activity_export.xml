@@ -74,6 +74,19 @@
             android:layout_height="wrap_content"
             android:layout_marginBottom="24dp" />
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="向き(出力動画の向きを指定します)"
+            android:textSize="14sp"
+            android:layout_marginBottom="8dp" />
+
+        <Spinner
+            android:id="@+id/spinnerOrientation"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="24dp" />
+
         <Button
             android:id="@+id/buttonExport"
             android:layout_width="match_parent"

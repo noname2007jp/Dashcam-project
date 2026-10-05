@@ -11,6 +11,8 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
+import android.view.OrientationEventListener
+import android.view.Surface
 import androidx.camera.core.Preview
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
@@ -47,6 +49,11 @@ class DashcamForegroundService : LifecycleService() {
         const val ACTION_STOP = "com.example.dashcam.action.STOP"
         const val ACTION_PAUSE = "com.example.dashcam.action.PAUSE"
         const val ACTION_RESUME = "com.example.dashcam.action.RESUME"
+
+        /** サービス(録画)が起動中かどうか。MainActivityから参照する */
+        @Volatile
+        var isServiceActive = false
+            private set
     }
 
     private var recorder: DashcamRecorder? = null
@@ -60,6 +67,9 @@ class DashcamForegroundService : LifecycleService() {
     private var voiceAlertManager: VoiceAlertManager? = null
     private val settingsManager: SettingsManager by lazy { SettingsManager(this) }
     private val fileExporter: FileExporter by lazy { FileExporter(this) }
+
+    /** 端末の向きの変化を監視し、録画の回転に反映させるためのリスナー */
+    private var orientationListener: OrientationEventListener? = null
 
     // 駐車監視モード中かどうか(動体検知トリガー録画を有効にするかの判定に使う)
     @Volatile
@@ -125,6 +135,8 @@ class DashcamForegroundService : LifecycleService() {
                 startShockDetector()
                 startTailgatingDetector()
                 startDrivingStateDetector()
+                startOrientationListener()
+                isServiceActive = true
             }
         }
 
@@ -221,6 +233,35 @@ class DashcamForegroundService : LifecycleService() {
         wakeLock = null
     }
 
+    /**
+     * 端末の向きの変化を常時監視し、DashcamRecorderへ通知する。
+     * 縦持ち/横持ちのどちらで起動しても、また録画途中で向きが変わっても、
+     * 以降のセグメントから正しい向きで録画されるようにするための対応
+     * (VideoCaptureの回転はセグメント境界=最大2分で追従する)。
+     */
+    private fun startOrientationListener() {
+        if (orientationListener != null) return
+        orientationListener = object : OrientationEventListener(this) {
+            override fun onOrientationChanged(orientation: Int) {
+                if (orientation == ORIENTATION_UNKNOWN) return
+                val rotation = when (orientation) {
+                    in 45..134 -> Surface.ROTATION_90
+                    in 135..224 -> Surface.ROTATION_180
+                    in 225..314 -> Surface.ROTATION_270
+                    else -> Surface.ROTATION_0
+                }
+                recorder?.updateTargetRotation(rotation)
+            }
+        }
+        orientationListener?.enable()
+        Log.i(TAG, "向き監視を開始しました")
+    }
+
+    private fun stopOrientationListener() {
+        orientationListener?.disable()
+        orientationListener = null
+    }
+
     private fun startMetadataRecorder() {
         if (metadataRecorder != null) {
             Log.w(TAG, "既にMetadataRecorderが起動しています")
@@ -309,6 +350,8 @@ class DashcamForegroundService : LifecycleService() {
                 }
             }
         )
+        // 設定画面で変更可能な急ブレーキ検知の閾値を適用する
+        tailgatingDetector?.setBrakingThreshold(settingsManager.tailgatingBrakingThresholdG)
         tailgatingDetector?.start()
         // 開始直後は走行状態が未確定なため、DrivingStateDetectorの判定が
         // 出るまでは非アクティブ。DRIVING判定時に setActive(true) される。
@@ -345,6 +388,9 @@ class DashcamForegroundService : LifecycleService() {
                 }
             }
         ).apply {
+            // 設定画面で変更可能な衝撃検知の閾値を適用する
+            setDrivingThreshold(settingsManager.shockDrivingThresholdG)
+            setParkingThreshold(settingsManager.shockParkingThresholdG)
             start()
         }
     }
@@ -468,6 +514,12 @@ class DashcamForegroundService : LifecycleService() {
             }
         )
 
+        // 保護フォルダへ移動されたセグメントに対応するメタデータJSONも
+        // 同じく保護フォルダへ移動させる(ループフォルダへの取り残し防止)
+        recorder?.onPreviousSegmentMovedToProtected = { displayName ->
+            metadataRecorder?.moveMetadataToProtected(displayName)
+        }
+
         recorder?.initialize()
         // 初期状態は走行中とみなして常時録画を開始する。
         // DrivingStateDetectorの判定が確定し次第、駐車中であれば自動的に停止される。
@@ -476,6 +528,8 @@ class DashcamForegroundService : LifecycleService() {
     }
 
     private fun stopRecordingAndSelf() {
+        isServiceActive = false
+        stopOrientationListener()
         recorder?.release()
         recorder = null
         motionDetector = null
@@ -492,6 +546,8 @@ class DashcamForegroundService : LifecycleService() {
     }
 
     override fun onDestroy() {
+        isServiceActive = false
+        stopOrientationListener()
         recorder?.release()
         recorder = null
         motionDetector = null

@@ -1,0 +1,26 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- セキュリティカメラ/ドラレコの本体 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M36,42 h36 a6,6 0 0 1 6,6 v14 a6,6 0 0 1 -6,6 h-36 a6,6 0 0 1 -6,-6 v-14 a6,6 0 0 1 6,-6 z" />
+    <!-- レンズ(外周リング+内側の穴) -->
+    <path
+        android:fillColor="#FF1A237E"
+        android:fillType="evenOdd"
+        android:pathData="M50,51 m-10,0 a10,10 0 1 0 20,0 a10,10 0 1 0 -20,0 z M50,51 m-5.5,0 a5.5,5.5 0 1 1 11,0 a5.5,5.5 0 1 1 -11,0 z" />
+    <!-- 録画ランプ(赤) -->
+    <path
+        android:fillColor="#FFFF5252"
+        android:pathData="M70,47 m-2.5,0 a2.5,2.5 0 1 0 5,0 a2.5,2.5 0 1 0 -5,0 z" />
+    <!-- フロントガラス取付スタンド -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M47.5,30 h5 v10 h-5 z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M42,26 h24 a2,2 0 0 1 2,2 v2 a2,2 0 0 1 -2,2 h-24 a2,2 0 0 1 -2,-2 v-2 a2,2 0 0 1 2,-2 z" />
+</vector>

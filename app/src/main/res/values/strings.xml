@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Dashcam</string>
+    <color name="ic_launcher_background">#283593</color>
 </resources>
