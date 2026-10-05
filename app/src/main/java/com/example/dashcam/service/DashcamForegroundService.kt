@@ -101,6 +101,15 @@ class DashcamForegroundService : LifecycleService() {
         recorder?.setPreviewSurfaceProvider(null)
     }
 
+    /**
+     * プレビューのtargetRotationを、Activity側の実際のDisplay.rotationに
+     * 合わせて設定する。Activity起動時・画面回転によるActivity再生成時に
+     * 呼び出す想定。
+     */
+    fun setPreviewTargetRotation(rotation: Int) {
+        recorder?.setPreviewTargetRotation(rotation)
+    }
+
     override fun onCreate() {
         super.onCreate()
         isRunning = true

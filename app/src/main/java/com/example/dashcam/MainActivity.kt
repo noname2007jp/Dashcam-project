@@ -209,6 +209,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun attachPreview() {
+        // Activity(=この画面)の実際のDisplayの向きに合わせてプレビューの回転を設定する。
+        // 画面回転でActivityが再生成されるたびにこの関数が呼ばれるため、常に
+        // そのときの実際の画面の向きに同期する。
+        val displayRotation = previewView.display?.rotation ?: android.view.Surface.ROTATION_0
+        boundService?.setPreviewTargetRotation(displayRotation)
         boundService?.attachPreviewSurfaceProvider(previewView.surfaceProvider)
     }
 

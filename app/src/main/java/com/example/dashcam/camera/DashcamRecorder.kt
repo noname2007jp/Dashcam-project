@@ -188,10 +188,16 @@ class DashcamRecorder(
     }
 
     /**
-     * 端末の物理的な向きを監視し、変化があればPreview/VideoCaptureの
-     * targetRotationを更新する。サービスはActivityの画面回転コールバックを
-     * 受け取れないため、OrientationEventListener(加速度センサーベース)で
-     * 自前に向きを検知する。
+     * 端末の物理的な向きを監視し、変化があれば VideoCapture(録画)の
+     * targetRotationを更新する。録画はActivityが非表示の間もバックグラウンドで
+     * 継続するため、画面の状態に依存しないセンサーベースの検知が必要。
+     *
+     * 注意: Preview(画面プレビュー)側は、ここでは更新しない。PreviewViewは
+     * Activityの実際の画面の向き(Display.rotation)に基づいて内部で補正を
+     * 行う仕組みを持っているため、センサーの生角度でPreview側も上書きすると
+     * 二重に回転がかかってプレビューが歪む(縦に伸びる等)原因になる。
+     * Previewの向きは setPreviewTargetRotation() で別途、Activity側の
+     * Display.rotationに合わせて設定すること。
      */
     private fun startOrientationTracking() {
         if (orientationEventListener != null) return
@@ -209,9 +215,8 @@ class DashcamRecorder(
 
                 if (rotation != lastAppliedRotation) {
                     lastAppliedRotation = rotation
-                    preview?.targetRotation = rotation
                     videoCapture?.targetRotation = rotation
-                    Log.i(TAG, "向きの変化を検知してtargetRotationを更新: $rotation")
+                    Log.i(TAG, "向きの変化を検知してVideoCaptureのtargetRotationを更新: $rotation")
                 }
             }
         }.also { it.enable() }
@@ -221,6 +226,16 @@ class DashcamRecorder(
         orientationEventListener?.disable()
         orientationEventListener = null
         lastAppliedRotation = null
+    }
+
+    /**
+     * プレビューのtargetRotationを設定する。Activity側(MainActivity)が、
+     * 自身が表示されているDisplayの実際の回転状態(previewView.display.rotation)を
+     * 渡して呼び出す想定。Activityが回転して再生成されるたびに呼び出すことで、
+     * プレビューが常にその時点の画面の向きと一致した状態で表示される。
+     */
+    fun setPreviewTargetRotation(rotation: Int) {
+        preview?.targetRotation = rotation
     }
 
     /**
