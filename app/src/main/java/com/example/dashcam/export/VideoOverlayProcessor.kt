@@ -37,8 +37,7 @@ class VideoOverlayProcessor(
     private val outputVideoWidth: Int = 1920,
     private val outputVideoHeight: Int = 1080,
     private val bitRate: Int = 8_000_000,
-    private val frameRate: Int = 30,
-    private val extraRotationDegrees: Float = 0f
+    private val frameRate: Int = 30
 ) {
     /**
      * エンコードを実行する。
@@ -102,7 +101,7 @@ class VideoOverlayProcessor(
                 outputVideoHeight = outputVideoHeight,
                 originVideoWidth = originVideoWidth,
                 originVideoHeight = originVideoHeight,
-                videoRotationDegrees = compensationDegrees + extraRotationDegrees
+                videoRotationDegrees = compensationDegrees
             )
         )
         codecInputSurface.makeCurrent()

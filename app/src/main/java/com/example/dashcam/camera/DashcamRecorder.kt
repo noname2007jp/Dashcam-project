@@ -6,6 +6,8 @@ import android.net.Uri
 import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
+import android.view.OrientationEventListener
+import android.view.Surface
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
@@ -94,19 +96,12 @@ class DashcamRecorder(
     private var preview: Preview? = null
 
     /**
-     * 録画・プレビューに適用する表示回転(Surface.ROTATION_0/90/180/270)。
-     * OrientationEventListener等により外部から随時更新される。
-     * VideoCaptureへの反映は次のセグメント開始時に行われる(CameraXの推奨どおり
-     * 録画アイドル時に回転を切り替える。セグメント境界=最大2分で追従)。
+     * 端末の物理的な向きを監視し、Preview/VideoCaptureのtargetRotationを追従させる。
+     * サービス側でカメラをバインドしているため、Activityの画面回転とは独立して
+     * 自前で向きを監視する必要がある(そうしないと起動時の向きに固定されてしまう)。
      */
-    @Volatile
-    private var targetRotation: Int = android.view.Surface.ROTATION_0
-
-    /**
-     * 直前の完了済みセグメントが保護フォルダへ移動されたときに呼ばれるコールバック。
-     * 対応するメタデータJSONも保護フォルダへ移動させるために使用する。
-     */
-    var onPreviousSegmentMovedToProtected: ((displayName: String) -> Unit)? = null
+    private var orientationEventListener: OrientationEventListener? = null
+    private var lastAppliedRotation: Int? = null
     private var currentRecording: Recording? = null
     private var currentSegmentUri: Uri? = null
     private var currentSegmentDisplayName: String? = null
@@ -114,7 +109,6 @@ class DashcamRecorder(
 
     // 直前に完了したセグメント(衝撃検知が発生した瞬間の「1つ前」を保護するために保持)
     private var lastCompletedSegmentUri: Uri? = null
-    private var lastCompletedSegmentDisplayName: String? = null
 
     // 現在録画中のセグメントが保護対象としてマークされているかどうか
     @Volatile
@@ -128,23 +122,6 @@ class DashcamRecorder(
 
     @Volatile
     private var isRunning = false
-
-    /**
-     * 録画の向き(ターゲット回転)を更新する。端末の向きが変わったときに
-     * 呼び出し側(サービス)から呼ぶ。VideoCaptureが既にバインド済みなら
-     * 即座にユースケースへも適用する(実際の録画への反映は次セグメントから)。
-     */
-    fun updateTargetRotation(rotation: Int) {
-        if (targetRotation == rotation) return
-        targetRotation = rotation
-        try {
-            videoCapture?.targetRotation = rotation
-            preview?.targetRotation = rotation
-            Log.i(TAG, "ターゲット回転を更新: $rotation (次のセグメントから反映)")
-        } catch (e: Exception) {
-            Log.w(TAG, "ターゲット回転の更新に失敗", e)
-        }
-    }
 
     /** カメラを初期化し、バインドする。呼び出し後 startLoopRecording() で録画開始。 */
     fun initialize() {
@@ -172,9 +149,6 @@ class DashcamRecorder(
 
         videoCapture = VideoCapture.withOutput(recorder)
         preview = Preview.Builder().build()
-        // バインド時点での最新の表示回転を適用する(縦持ち/横持ちどちらで起動しても対応)
-        videoCapture!!.targetRotation = targetRotation
-        preview!!.targetRotation = targetRotation
 
         val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA // アウトカメラのみ
 
@@ -206,10 +180,47 @@ class DashcamRecorder(
                 Log.i(TAG, "ズーム倍率を設定しました: $ratio")
             }
             Log.i(TAG, "カメラのバインドに成功しました(動体検知=${imageAnalysis != null})")
+            startOrientationTracking()
         } catch (e: Exception) {
             Log.e(TAG, "カメラのバインドに失敗しました", e)
             listener.onCameraInitFailed(e)
         }
+    }
+
+    /**
+     * 端末の物理的な向きを監視し、変化があればPreview/VideoCaptureの
+     * targetRotationを更新する。サービスはActivityの画面回転コールバックを
+     * 受け取れないため、OrientationEventListener(加速度センサーベース)で
+     * 自前に向きを検知する。
+     */
+    private fun startOrientationTracking() {
+        if (orientationEventListener != null) return
+
+        orientationEventListener = object : OrientationEventListener(context) {
+            override fun onOrientationChanged(orientationDegrees: Int) {
+                if (orientationDegrees == ORIENTATION_UNKNOWN) return
+
+                val rotation = when (orientationDegrees) {
+                    in 45 until 135 -> Surface.ROTATION_270
+                    in 135 until 225 -> Surface.ROTATION_180
+                    in 225 until 315 -> Surface.ROTATION_90
+                    else -> Surface.ROTATION_0
+                }
+
+                if (rotation != lastAppliedRotation) {
+                    lastAppliedRotation = rotation
+                    preview?.targetRotation = rotation
+                    videoCapture?.targetRotation = rotation
+                    Log.i(TAG, "向きの変化を検知してtargetRotationを更新: $rotation")
+                }
+            }
+        }.also { it.enable() }
+    }
+
+    private fun stopOrientationTracking() {
+        orientationEventListener?.disable()
+        orientationEventListener = null
+        lastAppliedRotation = null
     }
 
     /**
@@ -254,21 +265,15 @@ class DashcamRecorder(
             Log.i(TAG, "現在のセグメントを保護対象としてマーク: $currentSegmentDisplayName")
 
             val previousUri = lastCompletedSegmentUri
-            val previousDisplayName = lastCompletedSegmentDisplayName
             if (previousUri != null) {
                 cameraExecutor.execute {
                     val moved = moveToProtectedFolder(previousUri)
                     if (moved) {
                         Log.i(TAG, "直前のセグメントを保護フォルダへ移動しました")
-                        // メタデータJSONも同じく保護フォルダへ移動させる
-                        previousDisplayName?.let { name ->
-                            onPreviousSegmentMovedToProtected?.invoke(name)
-                        }
                     }
                 }
                 // 同じセグメントを二重に保護対象としないようクリア
                 lastCompletedSegmentUri = null
-                lastCompletedSegmentDisplayName = null
             }
         }
     }
@@ -390,7 +395,6 @@ class DashcamRecorder(
                         } else {
                             Log.i(TAG, "セグメント保存完了: $displayName (${duration}ms)")
                             lastCompletedSegmentUri = uri
-                            lastCompletedSegmentDisplayName = displayName
                             listener.onSegmentSaved(uri, displayName, duration)
                         }
                     }
@@ -412,5 +416,6 @@ class DashcamRecorder(
     /** リソース解放。Activity/Service の onDestroy 等から呼び出す。 */
     fun release() {
         stopRecording()
+        stopOrientationTracking()
     }
 }

@@ -3,24 +3,45 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- セキュリティカメラ/ドラレコの本体 -->
+
+    <!-- マウントの吸盤土台 -->
     <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M36,42 h36 a6,6 0 0 1 6,6 v14 a6,6 0 0 1 -6,6 h-36 a6,6 0 0 1 -6,-6 v-14 a6,6 0 0 1 6,-6 z" />
-    <!-- レンズ(外周リング+内側の穴) -->
+        android:fillColor="#90A4AE"
+        android:pathData="M47,86 A7,7 0 1,0 61,86 A7,7 0 1,0 47,86 Z" />
+
+    <!-- マウントのアーム -->
     <path
-        android:fillColor="#FF1A237E"
-        android:fillType="evenOdd"
-        android:pathData="M50,51 m-10,0 a10,10 0 1 0 20,0 a10,10 0 1 0 -20,0 z M50,51 m-5.5,0 a5.5,5.5 0 1 1 11,0 a5.5,5.5 0 1 1 -11,0 z" />
-    <!-- 録画ランプ(赤) -->
+        android:fillColor="#90A4AE"
+        android:pathData="M51,72 L57,72 L57,82 L51,82 Z" />
+
+    <!-- カメラ本体 -->
     <path
-        android:fillColor="#FFFF5252"
-        android:pathData="M70,47 m-2.5,0 a2.5,2.5 0 1 0 5,0 a2.5,2.5 0 1 0 -5,0 z" />
-    <!-- フロントガラス取付スタンド -->
+        android:fillColor="#FFFFFF"
+        android:pathData="M20,40 L88,40 L88,74 L20,74 Z" />
+
+    <!-- 上部のビューファインダー部分 -->
     <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M47.5,30 h5 v10 h-5 z" />
+        android:fillColor="#FFFFFF"
+        android:pathData="M40,30 L68,30 L68,40 L40,40 Z" />
+
+    <!-- レンズ(外枠) -->
     <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M42,26 h24 a2,2 0 0 1 2,2 v2 a2,2 0 0 1 -2,2 h-24 a2,2 0 0 1 -2,-2 v-2 a2,2 0 0 1 2,-2 z" />
+        android:fillColor="#1A237E"
+        android:pathData="M37,57 A17,17 0 1,0 71,57 A17,17 0 1,0 37,57 Z" />
+
+    <!-- レンズ(内側) -->
+    <path
+        android:fillColor="#546E7A"
+        android:pathData="M42,57 A12,12 0 1,0 66,57 A12,12 0 1,0 42,57 Z" />
+
+    <!-- レンズのハイライト -->
+    <path
+        android:fillColor="#CFD8DC"
+        android:pathData="M46,53 A4,4 0 1,0 54,53 A4,4 0 1,0 46,53 Z" />
+
+    <!-- 録画中を示す赤ランプ -->
+    <path
+        android:fillColor="#E53935"
+        android:pathData="M72,34 A6,6 0 1,0 84,34 A6,6 0 1,0 72,34 Z" />
+
 </vector>

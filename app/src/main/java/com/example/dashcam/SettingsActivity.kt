@@ -8,6 +8,7 @@ import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.RadioButton
 import android.widget.RadioGroup
+import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
@@ -18,8 +19,6 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import com.example.dashcam.camera.CameraLensHelper
-import com.example.dashcam.sensor.ShockDetector
-import com.example.dashcam.sensor.TailgatingDetector
 import com.example.dashcam.settings.SettingsManager
 
 /**
@@ -39,11 +38,18 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var textLensDescription: TextView
     private lateinit var radioGroupLens: RadioGroup
     private lateinit var spinnerCapacity: Spinner
-    private lateinit var spinnerShockDriving: Spinner
-    private lateinit var spinnerShockParking: Spinner
-    private lateinit var spinnerTailgating: Spinner
+    private lateinit var seekShockDriving: SeekBar
+    private lateinit var textShockDrivingValue: TextView
+    private lateinit var seekShockParking: SeekBar
+    private lateinit var textShockParkingValue: TextView
+    private lateinit var seekTailgating: SeekBar
+    private lateinit var textTailgatingValue: TextView
 
     private var lensOptions: List<CameraLensHelper.ZoomLensOption> = emptyList()
+
+    // SeekBarのprogress(0始まり)からG値(0.1刻み)への変換: value = MIN + progress * STEP
+    private val thresholdStep = 0.1f
+    private val thresholdMin = 0.1f
 
     private val capacityOptions = listOf(
         "無制限" to null,
@@ -119,9 +125,12 @@ class SettingsActivity : AppCompatActivity() {
         textLensDescription = findViewById(R.id.textLensDescription)
         radioGroupLens = findViewById(R.id.radioGroupLens)
         spinnerCapacity = findViewById(R.id.spinnerCapacity)
-        spinnerShockDriving = findViewById(R.id.spinnerShockDriving)
-        spinnerShockParking = findViewById(R.id.spinnerShockParking)
-        spinnerTailgating = findViewById(R.id.spinnerTailgating)
+        seekShockDriving = findViewById(R.id.seekShockDriving)
+        textShockDrivingValue = findViewById(R.id.textShockDrivingValue)
+        seekShockParking = findViewById(R.id.seekShockParking)
+        textShockParkingValue = findViewById(R.id.textShockParkingValue)
+        seekTailgating = findViewById(R.id.seekTailgating)
+        textTailgatingValue = findViewById(R.id.textTailgatingValue)
 
         findViewById<Button>(R.id.buttonChooseFolder).setOnClickListener {
             folderPickerLauncher.launch(null)
@@ -136,80 +145,7 @@ class SettingsActivity : AppCompatActivity() {
         updateCurrentLocationText()
         loadLensOptions()
         setupCapacitySpinner()
-        setupThresholdSpinners()
-    }
-
-    /**
-     * 検知閾値のスピナーを初期化する。0.1G刻みの選択肢を用意し、
-     * 選択内容をSharedPreferencesへ永続化する。
-     * 反映タイミングは録画(サービス)起動時。
-     */
-    private fun setupThresholdSpinners() {
-        setupThresholdSpinner(
-            spinnerShockDriving,
-            thresholdOptions(ShockDetector.MIN_THRESHOLD_G, ShockDetector.MAX_THRESHOLD_G),
-            settingsManager.shockDrivingThresholdG
-        ) { value ->
-            settingsManager.shockDrivingThresholdG = value
-        }
-        setupThresholdSpinner(
-            spinnerShockParking,
-            thresholdOptions(ShockDetector.MIN_THRESHOLD_G, ShockDetector.MAX_THRESHOLD_G),
-            settingsManager.shockParkingThresholdG
-        ) { value ->
-            settingsManager.shockParkingThresholdG = value
-        }
-        setupThresholdSpinner(
-            spinnerTailgating,
-            thresholdOptions(TailgatingDetector.MIN_THRESHOLD_G, TailgatingDetector.MAX_THRESHOLD_G),
-            settingsManager.tailgatingBrakingThresholdG
-        ) { value ->
-            settingsManager.tailgatingBrakingThresholdG = value
-        }
-    }
-
-    /** min〜maxを0.1G刻みで並べた選択肢を作る */
-    private fun thresholdOptions(min: Float, max: Float): List<Float> {
-        val options = mutableListOf<Float>()
-        var value = min
-        while (value <= max + 0.001f) {
-            options.add(Math.round(value * 10f) / 10f)
-            value += 0.1f
-        }
-        return options
-    }
-
-    private fun setupThresholdSpinner(
-        spinner: Spinner,
-        values: List<Float>,
-        currentValue: Float,
-        onSelected: (Float) -> Unit
-    ) {
-        spinner.adapter = ArrayAdapter(
-            this, android.R.layout.simple_spinner_dropdown_item,
-            values.map { "%.1fG".format(it) }
-        )
-        val currentIndex = values.indexOfFirst { Math.abs(it - currentValue) < 0.05f }
-        spinner.setSelection(if (currentIndex >= 0) currentIndex else 0)
-        spinner.post {
-            spinner.onItemSelectedListener =
-                object : android.widget.AdapterView.OnItemSelectedListener {
-                    override fun onItemSelected(
-                        parent: android.widget.AdapterView<*>?,
-                        view: android.view.View?,
-                        position: Int,
-                        id: Long
-                    ) {
-                        val value = values[position]
-                        if (Math.abs(value - currentValue) > 0.001f) {
-                            onSelected(value)
-                            Toast.makeText(this@SettingsActivity, "閾値を保存しました(次回の録画開始時に反映)", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-
-                    override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
-                }
-        }
+        setupThresholdSliders()
     }
 
     private fun setupCapacitySpinner() {
@@ -237,6 +173,69 @@ class SettingsActivity : AppCompatActivity() {
                     override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
                 }
         }
+    }
+
+    /** G値 -> SeekBarのprogress値に変換(0.1刻み) */
+    private fun thresholdToProgress(value: Float): Int {
+        return ((value - thresholdMin) / thresholdStep).toInt().coerceAtLeast(0)
+    }
+
+    /** SeekBarのprogress値 -> G値に変換(0.1刻み) */
+    private fun progressToThreshold(progress: Int): Float {
+        return thresholdMin + progress * thresholdStep
+    }
+
+    private fun setupThresholdSliders() {
+        seekShockDriving.progress = thresholdToProgress(settingsManager.shockDrivingThreshold)
+        textShockDrivingValue.text =
+            "走行中の衝撃検知: %.1fG".format(settingsManager.shockDrivingThreshold)
+        seekShockDriving.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val value = progressToThreshold(progress)
+                textShockDrivingValue.text = "走行中の衝撃検知: %.1fG".format(value)
+                if (fromUser) settingsManager.shockDrivingThreshold = value
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                Toast.makeText(
+                    this@SettingsActivity, "設定を保存しました(次回起動時から反映)", Toast.LENGTH_SHORT
+                ).show()
+            }
+        })
+
+        seekShockParking.progress = thresholdToProgress(settingsManager.shockParkingThreshold)
+        textShockParkingValue.text =
+            "駐車監視中の衝撃検知: %.1fG".format(settingsManager.shockParkingThreshold)
+        seekShockParking.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val value = progressToThreshold(progress)
+                textShockParkingValue.text = "駐車監視中の衝撃検知: %.1fG".format(value)
+                if (fromUser) settingsManager.shockParkingThreshold = value
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                Toast.makeText(
+                    this@SettingsActivity, "設定を保存しました(次回起動時から反映)", Toast.LENGTH_SHORT
+                ).show()
+            }
+        })
+
+        seekTailgating.progress = thresholdToProgress(settingsManager.tailgatingThreshold)
+        textTailgatingValue.text =
+            "急ブレーキ(煽り運転の可能性)検知: %.1fG".format(settingsManager.tailgatingThreshold)
+        seekTailgating.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val value = progressToThreshold(progress)
+                textTailgatingValue.text = "急ブレーキ(煽り運転の可能性)検知: %.1fG".format(value)
+                if (fromUser) settingsManager.tailgatingThreshold = value
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                Toast.makeText(
+                    this@SettingsActivity, "設定を保存しました(次回起動時から反映)", Toast.LENGTH_SHORT
+                ).show()
+            }
+        })
     }
 
     private fun updateCurrentLocationText() {

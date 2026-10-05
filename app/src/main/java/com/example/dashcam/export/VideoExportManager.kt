@@ -41,10 +41,19 @@ class VideoExportManager(private val context: Context) {
     }
 
     /**
+     * 書き出し時の出力の向き。
+     * 端末の回転追従の不具合により、録画の回転情報が信用できない場合の
+     * 手動上書き用(自動検出を使わず、常にこちらを優先する)。
+     */
+    enum class OutputOrientation { LANDSCAPE, PORTRAIT }
+
+    /**
      * @param sourceVideoUri 元動画(MediaStoreのUri)
      * @param sourceDisplayName 元動画の表示名(例: "2026-09-18_143207.mp4")
      * @param metadataJsonUri 対応するメタデータJSONのUri(なければnull。焼き込み内容が空になる)
      * @param options 焼き込みオプション(日時/位置/速度、表示位置)
+     * @param outputOrientation 出力の向き(横/縦)。自動検出した回転情報は使わず、
+     *   常にこちらの指定を優先する
      * @param onProgress 進捗コールバック(0.0〜1.0の概算。厳密な進捗ではない)
      */
     suspend fun export(
@@ -52,6 +61,7 @@ class VideoExportManager(private val context: Context) {
         sourceDisplayName: String,
         metadataJsonUri: Uri?,
         options: ExportOptions,
+        outputOrientation: OutputOrientation = OutputOrientation.LANDSCAPE,
         onProgress: (String) -> Unit = {}
     ): Result = withContext(Dispatchers.Default) {
         val tempDir = File(context.cacheDir, "export_tmp").apply { mkdirs() }
@@ -60,7 +70,7 @@ class VideoExportManager(private val context: Context) {
 
         try {
             onProgress("元動画の情報を確認中")
-            val sourceInfo = readSourceVideoInfo(sourceVideoUri)
+            val sourceInfo = readSourceVideoInfo(sourceVideoUri, outputOrientation)
             Log.i(
                 TAG,
                 "元動画情報: ${sourceInfo.width}x${sourceInfo.height}, " +
@@ -74,30 +84,14 @@ class VideoExportManager(private val context: Context) {
             val overlayRenderer = OverlayTextRenderer(samples, videoStartEpochMs, options)
 
             onProgress("映像にテキストを焼き込み中")
-
-            // 書き出しの向き指定(横/縦)。録画時に向きが固定されてしまった動画でも、
-            // ここで90度回転させて指定した向きに出力する。デフォルトは横向き。
-            val sourceIsLandscape = sourceInfo.width >= sourceInfo.height
-            val wantLandscape = options.orientation == ExportOptions.Orientation.LANDSCAPE
-            var outputWidth = sourceInfo.width
-            var outputHeight = sourceInfo.height
-            var extraRotation = 0f
-            if (sourceIsLandscape != wantLandscape) {
-                outputWidth = sourceInfo.height
-                outputHeight = sourceInfo.width
-                extraRotation = 90f
-                Log.i(TAG, "書き出し時に向きを変更します: ${options.orientation} (90度回転)")
-            }
-
             val processor = VideoOverlayProcessor(
                 context = context,
                 sourceUri = sourceVideoUri,
                 resultFile = videoOnlyFile,
-                outputVideoWidth = outputWidth,
-                outputVideoHeight = outputHeight,
+                outputVideoWidth = sourceInfo.width,
+                outputVideoHeight = sourceInfo.height,
                 bitRate = sourceInfo.bitRate,
-                frameRate = sourceInfo.frameRate,
-                extraRotationDegrees = extraRotation
+                frameRate = sourceInfo.frameRate
             )
             processor.encode { timeMs ->
                 overlayRenderer.draw(this, timeMs)
@@ -139,13 +133,15 @@ class VideoExportManager(private val context: Context) {
      * (ビットレートが元より低い場合)、逆に無駄にファイルサイズが増えたりする
      * (ビットレートが元より高い場合)ため、必ず元動画の値に合わせる。
      *
-     * 重要: MediaMetadataRetrieverのWIDTH/HEIGHTは「コーディングされた生の幅・高さ」であり、
-     * 回転情報(METADATA_KEY_VIDEO_ROTATION)を反映していない。90度/270度回転の動画では
-     * 幅と高さが実際の表示状態と入れ替わっているため、ここで補正しておかないと、
-     * 出力Canvas(=テキスト描画先)の縦横が映像の実際の向きと食い違い、
-     * 「映像は正しい向きなのにテキストだけ90度ずれる」といった不具合の原因になる。
+     * 重要: 画面回転の追従不具合により、録画そのものの回転情報(METADATA_KEY_VIDEO_ROTATION)が
+     * 信用できない場合があるため、ここでは回転メタデータによる自動補正は行わず、
+     * 常に outputOrientation(ユーザー指定の横/縦)を優先して幅・高さを決定する。
+     * (「生の幅・高さ」のうち長い方を長辺、短い方を短辺として、指定の向きに割り当てる)
      */
-    private fun readSourceVideoInfo(sourceUri: Uri): SourceVideoInfo {
+    private fun readSourceVideoInfo(
+        sourceUri: Uri,
+        outputOrientation: OutputOrientation
+    ): SourceVideoInfo {
         val retriever = MediaMetadataRetriever()
         return try {
             retriever.setDataSource(context, sourceUri)
@@ -153,15 +149,13 @@ class VideoExportManager(private val context: Context) {
                 ?.toIntOrNull() ?: DEFAULT_WIDTH
             val rawHeight = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
                 ?.toIntOrNull() ?: DEFAULT_HEIGHT
-            val rotation = retriever.extractMetadata(
-                MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION
-            )?.toIntOrNull() ?: 0
 
-            // 90度/270度回転の場合、実際の表示上の幅・高さは入れ替わる
-            val (width, height) = if (rotation == 90 || rotation == 270) {
-                rawHeight to rawWidth
+            val longSide = maxOf(rawWidth, rawHeight)
+            val shortSide = minOf(rawWidth, rawHeight)
+            val (width, height) = if (outputOrientation == OutputOrientation.PORTRAIT) {
+                shortSide to longSide
             } else {
-                rawWidth to rawHeight
+                longSide to shortSide
             }
 
             val bitRate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)
@@ -172,8 +166,8 @@ class VideoExportManager(private val context: Context) {
 
             Log.i(
                 TAG,
-                "元動画の回転情報: ${rotation}度 (生の解像度 ${rawWidth}x${rawHeight} " +
-                    "-> 補正後 ${width}x${height})"
+                "元動画の生の解像度 ${rawWidth}x${rawHeight} -> 指定の向き($outputOrientation)で " +
+                    "${width}x${height} に出力"
             )
 
             SourceVideoInfo(width, height, bitRate, frameRate)

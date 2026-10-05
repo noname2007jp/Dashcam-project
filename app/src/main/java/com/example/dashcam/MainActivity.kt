@@ -24,8 +24,10 @@ import com.example.dashcam.service.DashcamForegroundService
 
 /**
  * 起動用Activity。
- * 必要なパーミッションをリクエストし、揃ったらフォアグラウンドサービスを起動する。
+ * 画面下部の「開始」ボタンを押したときにのみ、パーミッション確認のうえ
+ * フォアグラウンドサービスを起動する(自動開始はしない)。
  * 画面右上のメニュー(三本線)から設定画面(保存先フォルダ等)へ遷移できる。
+ * プレビュー上をタップするとツールバー(紫のバー)の表示/非表示を切り替えられる。
  *
  * 設置時の画角調整用に、Activityが表示されている間だけカメラのプレビュー映像を
  * PreviewViewに表示する。録画自体はサービス側で継続しており、Activityの表示・非表示は
@@ -45,13 +47,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var buttonPauseResume: Button
     private lateinit var buttonStop: Button
 
+    // 「開始」ボタン押下時に権限が無かった場合、権限取得後に自動で開始処理へ進めるためのフラグ
+    private var startRequestedAfterPermission = false
+
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, service: IBinder) {
             val binder = service as DashcamForegroundService.LocalBinder
             boundService = binder.getService()
             attachPreview()
             updatePauseButtonText()
-            updateUiForRecordingState()
+            updateUiForRunningState(true)
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
@@ -78,9 +83,9 @@ class MainActivity : AppCompatActivity() {
     ) { results ->
         val allGranted = results.values.all { it }
         if (allGranted) {
-            // 権限が揃っても自動では録画を開始しない。
-            // ユーザーが「録画開始」ボタンを押したときに開始する
-            updateUiForRecordingState()
+            if (startRequestedAfterPermission) {
+                beginRecording()
+            }
         } else {
             Toast.makeText(
                 this,
@@ -88,6 +93,7 @@ class MainActivity : AppCompatActivity() {
                 Toast.LENGTH_LONG
             ).show()
         }
+        startRequestedAfterPermission = false
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -98,11 +104,7 @@ class MainActivity : AppCompatActivity() {
         setSupportActionBar(toolbar)
         previewView = findViewById(R.id.previewView)
 
-        buttonStart = findViewById(R.id.buttonStart)
-        buttonStop = findViewById(R.id.buttonStop)
-        buttonPauseResume = findViewById(R.id.buttonPauseResume)
-
-        // プレビューをタップすると、上部のバー(Dashcam表示・メニュー)を表示/非表示切り替え
+        // プレビュー部分をタップするとツールバーの表示/非表示を切り替える
         previewView.setOnClickListener {
             toolbar.visibility = if (toolbar.visibility == View.VISIBLE) {
                 View.GONE
@@ -111,54 +113,39 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 起動時は自動開始せず、「録画開始」ボタンで明示的に開始する
+        buttonStart = findViewById(R.id.buttonStart)
         buttonStart.setOnClickListener {
             if (hasAllPermissions()) {
-                startDashcam()
+                beginRecording()
             } else {
+                startRequestedAfterPermission = true
                 permissionLauncher.launch(requiredPermissions)
             }
         }
 
-        buttonStop.setOnClickListener {
-            confirmAndStopDashcam()
-        }
-
+        buttonPauseResume = findViewById(R.id.buttonPauseResume)
         buttonPauseResume.setOnClickListener {
             togglePauseResume()
         }
 
-        if (!hasAllPermissions()) {
-            permissionLauncher.launch(requiredPermissions)
+        buttonStop = findViewById(R.id.buttonStop)
+        buttonStop.setOnClickListener {
+            confirmAndStopDashcam()
         }
-        updateUiForRecordingState()
+
+        // 自動開始はしない。既に起動中(バックグラウンドから復帰等)なら
+        // onStart() でバインドして状態を復元する。
+        updateUiForRunningState(DashcamForegroundService.isRunning)
     }
 
     override fun onStart() {
         super.onStart()
-        // サービスが既に動いている場合(設定画面から戻ってきた等)だけ再バインドする。
-        // 自動的な録画開始は行わない(開始ボタン操作を必須にするため)
-        if (hasAllPermissions() && DashcamForegroundService.isServiceActive && !isBound) {
+        // 既にサービスが起動中(以前「開始」した状態が続いている)なら、
+        // 新規開始はせずバインドのみ行って状態を復元する
+        if (hasAllPermissions() && DashcamForegroundService.isRunning && !isBound) {
             bindToDashcamService()
         }
-        updateUiForRecordingState()
-    }
-
-    /**
-     * 録画(サービス)の稼働状態に応じてボタンの表示を切り替える。
-     * 未起動: 「録画開始」のみ表示 / 稼働中: 一時停止・終了を表示
-     */
-    private fun updateUiForRecordingState() {
-        val active = DashcamForegroundService.isServiceActive
-        buttonStart.visibility = if (active) View.GONE else View.VISIBLE
-        buttonPauseResume.visibility = if (active) View.VISIBLE else View.GONE
-        buttonStop.visibility = if (active) View.VISIBLE else View.GONE
-    }
-
-    private fun startDashcam() {
-        startDashcamService()
-        if (!isBound) bindToDashcamService()
-        updateUiForRecordingState()
+        updateUiForRunningState(DashcamForegroundService.isRunning)
     }
 
     override fun onStop() {
@@ -197,6 +184,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** 「開始」ボタンから呼ばれる。パーミッションが揃っている前提でサービスを開始する。 */
+    private fun beginRecording() {
+        startDashcamService()
+        if (!isBound) bindToDashcamService()
+        updateUiForRunningState(true)
+    }
+
     private fun startDashcamService() {
         val intent = Intent(this, DashcamForegroundService::class.java).apply {
             action = DashcamForegroundService.ACTION_START
@@ -216,6 +210,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun attachPreview() {
         boundService?.attachPreviewSurfaceProvider(previewView.surfaceProvider)
+    }
+
+    /** 開始前/開始後でボタンの表示を切り替える */
+    private fun updateUiForRunningState(running: Boolean) {
+        buttonStart.visibility = if (running) View.GONE else View.VISIBLE
+        buttonPauseResume.visibility = if (running) View.VISIBLE else View.GONE
+        buttonStop.visibility = if (running) View.VISIBLE else View.GONE
     }
 
     /**
@@ -245,10 +246,17 @@ class MainActivity : AppCompatActivity() {
     private fun confirmAndStopDashcam() {
         AlertDialog.Builder(this)
             .setTitle("ドラレコを終了しますか?")
-            .setMessage("終了すると、以降は録画・各種検知が行われなくなります。")
+            .setMessage("終了すると、以降は録画・各種検知が行われなくなります。「開始」ボタンでいつでも再開できます。")
             .setPositiveButton("終了する") { _, _ ->
                 stopDashcamService()
-                finish()
+                // バインドしたままだとサービスが完全に破棄されない(stopSelf()が
+                // 保留されるだけになる)ため、ここで明示的にバインド解除する
+                if (isBound) {
+                    unbindService(serviceConnection)
+                    isBound = false
+                    boundService = null
+                }
+                updateUiForRunningState(false)
             }
             .setNegativeButton("キャンセル", null)
             .show()

@@ -3,9 +3,9 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout
     android:layout_width="match_parent"
-    android:layout_height="match_parent"
+    android:layout_height="wrap_content"
     android:orientation="vertical"
     android:padding="24dp">
 
@@ -100,7 +100,6 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content" />
 
-
     <View
         android:layout_width="match_parent"
         android:layout_height="1dp"
@@ -111,7 +110,7 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="検知の感度(閾値)"
+        android:text="検知の閾値"
         android:textSize="18sp"
         android:textStyle="bold"
         android:layout_marginBottom="8dp" />
@@ -119,47 +118,48 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="検知のしやすさを0.1G単位で調整できます。数値を小さくすると敏感に(検知しやすく)、大きくすると鈍感に(誤検知しにくく)なります。設定変更は録画の再起動後に反映されます。"
+        android:text="値を大きくするほど鈍感(検知しにくく)、小さくするほど敏感(誤検知しやすく)なります。"
         android:textSize="13sp"
+        android:layout_marginBottom="16dp" />
+
+    <TextView
+        android:id="@+id/textShockDrivingValue"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="走行中の衝撃検知: 0.5G" />
+
+    <SeekBar
+        android:id="@+id/seekShockDriving"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:max="49"
+        android:layout_marginBottom="16dp" />
+
+    <TextView
+        android:id="@+id/textShockParkingValue"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="駐車監視中の衝撃検知: 0.2G" />
+
+    <SeekBar
+        android:id="@+id/seekShockParking"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:max="49"
+        android:layout_marginBottom="16dp" />
+
+    <TextView
+        android:id="@+id/textTailgatingValue"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="急ブレーキ(煽り運転の可能性)検知: 0.3G" />
+
+    <SeekBar
+        android:id="@+id/seekTailgating"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:max="19"
         android:layout_marginBottom="8dp" />
-
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="衝撃検知: 走行中"
-        android:textSize="14sp"
-        android:layout_marginBottom="4dp" />
-
-    <Spinner
-        android:id="@+id/spinnerShockDriving"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginBottom="12dp" />
-
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="衝撃検知: 駐車監視中"
-        android:textSize="14sp"
-        android:layout_marginBottom="4dp" />
-
-    <Spinner
-        android:id="@+id/spinnerShockParking"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginBottom="12dp" />
-
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="急ブレーキ検知(煽り運転の可能性)"
-        android:textSize="14sp"
-        android:layout_marginBottom="4dp" />
-
-    <Spinner
-        android:id="@+id/spinnerTailgating"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content" />
 
 </LinearLayout>
 </ScrollView>

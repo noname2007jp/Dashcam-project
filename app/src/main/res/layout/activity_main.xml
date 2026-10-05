@@ -1,71 +1,64 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical">
+    android:background="#000000">
 
+    <androidx.camera.view.PreviewView
+        android:id="@+id/previewView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- ツールバーはプレビューの上に重ねて表示し、タップで表示/非表示を切り替える -->
     <androidx.appcompat.widget.Toolbar
         android:id="@+id/toolbar"
         android:layout_width="match_parent"
         android:layout_height="?attr/actionBarSize"
+        android:layout_gravity="top"
         android:background="?attr/colorPrimary"
         android:theme="@style/ThemeOverlay.AppCompat.ActionBar" />
 
-    <FrameLayout
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:background="#000000">
+    <TextView
+        android:id="@+id/textStatus"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="72dp"
+        android:background="#80000000"
+        android:padding="8dp"
+        android:text="設置時の画角調整用プレビューです"
+        android:textColor="#FFFFFF"
+        android:textAlignment="center"
+        android:textSize="13sp" />
 
-        <androidx.camera.view.PreviewView
-            android:id="@+id/previewView"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent" />
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_margin="16dp"
+        android:orientation="horizontal">
 
         <Button
             android:id="@+id/buttonStart"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_gravity="center"
-            android:paddingStart="40dp"
-            android:paddingEnd="40dp"
-            android:text="録画開始"
-            android:textSize="18sp" />
+            android:text="開始" />
 
-        <TextView
-            android:id="@+id/textStatus"
+        <Button
+            android:id="@+id/buttonPauseResume"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_gravity="bottom|center_horizontal"
-            android:layout_marginBottom="72dp"
-            android:background="#80000000"
-            android:padding="8dp"
-            android:text="設置時の画角調整用プレビューです"
-            android:textColor="#FFFFFF"
-            android:textAlignment="center"
-            android:textSize="13sp" />
+            android:layout_marginEnd="12dp"
+            android:text="一時停止"
+            android:visibility="gone" />
 
-        <LinearLayout
+        <Button
+            android:id="@+id/buttonStop"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_gravity="bottom|center_horizontal"
-            android:layout_margin="16dp"
-            android:orientation="horizontal">
+            android:text="終了"
+            android:visibility="gone" />
 
-            <Button
-                android:id="@+id/buttonPauseResume"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginEnd="12dp"
-                android:text="一時停止" />
+    </LinearLayout>
 
-            <Button
-                android:id="@+id/buttonStop"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="終了" />
-
-        </LinearLayout>
-
-    </FrameLayout>
-
-</LinearLayout>
+</FrameLayout>
