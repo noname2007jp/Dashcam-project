@@ -66,16 +66,12 @@ Gradle Wrapperを同梱していないため、初回はAndroid Studioが自動�
 
 ## 画面表示について
 
-設置時の画角調整のため、**アプリ起動直後からカメラのプレビュー映像が表示されます**
+設置時の画角調整のため、**メイン画面表示中はカメラのプレビュー映像が表示されます**
 (`androidx.camera.view.PreviewView`)。`DashcamForegroundService`にバインドし、
 `Preview.SurfaceProvider`を中継する構成になっています。
 
-- アプリ起動時: 権限を確認して自動的にサービスへバインドし、プレビューを表示
-  (このバインドでは**録画は開始されません**。録画は「開始」ボタンを押したときのみ)
 - Activityが表示されている間: `attachPreviewSurfaceProvider()`でプレビュー描画
 - Activityが非表示(onStop)になったら: `detachPreviewSurfaceProvider()`で描画停止
-- 画面の向きが変わったら: `DisplayManager.DisplayListener`等から
-  `syncPreviewRotation()`を呼び、`Preview.targetRotation`をその都度同期
 
 録画自体はActivityの表示・非表示に関わらずサービス側で継続します。
 「走行中は画面を消してバッテリー節約」という当初の要件は、今後実装する
@@ -263,44 +259,28 @@ Gradle Wrapperを同梱していないため、初回はAndroid Studioが自動�
    急ブレーキ(煽り運転の可能性)検知の各閾値をSeekBar(0.1G刻み)で調整できる項目を追加
    (`SettingsManager`に保存、次回サービス起動時から反映)
 
-## 変更履歴(2026-10-07): プレビューの向き不具合の修正と起動時プレビュー表示
+## ディスプレイの時間設定OFF(疑似消灯)
 
-### 症状と原因
-「縦で起動して横に向けるとプレビューが縦長になる」「右下の横向き回転マークを押すと
-右が上になった縦長の映像になる」という症状は、プレビューの回転情報が
-**バインド時の1回だけ設定され、その後まったく更新されていなかった**ことが原因。
-`PreviewView` は `Display.rotation` とセンサー角度から表示変換を作りますが、
-`Preview.targetRotation` は自分では設定しません。この2つが90度ずれると
-プレビューだけが縦長・回転して見えます(録画側は `OrientationEventListener` で
-独立に更新しているため正常)。
+- `MainActivity`が`onUserInteraction()`(タッチ/キー操作のたびにAndroidが呼ぶコールバック)
+  でタイマーをリセットし、設定画面で指定した時間(30秒〜10分、既定は常時点灯)操作がないと
+  疑似消灯する
+- 疑似消灯は「黒い`View`オーバーレイの表示」+「`Window.attributes.screenBrightness`を
+  最小値(0.01)に設定」の組み合わせ。OS標準のスリープに頼らないのは、ロック画面のPIN等で
+  操作性が悪化するのを避けるため
+- オーバーレイをタップすると、輝度・オーバーレイを元に戻してタイマーを再始動する
 
-また `android:screenOrientation="fullSensor"` により、**90度↔270度(ランドスケープ左右反転)
-の切り替えではActivityの構成変更が発生しない**ため、`onCreate` や
-`onServiceConnected` に頼った同期では追従できないケースが残っていました。
+## 書き出し処理のフォアグラウンドサービス化
 
-### 修正内容
-- `MainActivity`: `DisplayManager.DisplayListener` / `onConfigurationChanged` / `onResume` の
-  3経路で `syncPreviewRotation()` を呼び、画面の向きが変わるたびに
-  `Preview.targetRotation` を同期。Viewが未アタッチ(`display == null`)のときは
-  既定値で固定せず何もしない(誤った値で固定されるのを防ぐ)
-- `DashcamRecorder.setPreviewTargetRotation()`: 同一値での再設定をスキップしてログ出力
-- `Preview` / `ImageAnalysis` に `ResolutionSelector` を導入し、プレビューを録画と同じ
-  16:9 に統一(`setTargetResolution()` は非推奨のため置き換え)
-- `PreviewView` の `scaleType` を `fitCenter` に明示(既定の `fillCenter` は
-  録画される画角より表示範囲が狭くなるため、画角調整に不適切)
-
-### 起動時からのプレビュー表示
-- `MainActivity.onStart()` で、**録画中かどうかに関わらず**サービスへバインドするように変更
-- `DashcamForegroundService.ensureCameraPrepared()` を新設し、録画を開始せずに
-  カメラとプレビューだけを準備(`DashcamRecorder.initialize()` は冪等化)
-- `isRunning` を `onCreate` ではなく録画開始時(`onStartCommand`)に立てるよう修正。
-  これにより「プレビュー表示のためのバインド」でサービスが生成されても、
-  「一時停止/終了」ボタンが誤って表示されない
-- 起動時にカメラ権限が無い場合は権限ダイアログを表示し、許可後に自動でバインドして
-  プレビューを表示。拒否時は画面下部に「カメラの許可が必要です」と表示
-- 「終了」で録画を止めたあともプレビューは復帰するようにした
+- `app/src/main/java/com/example/dashcam/export/ExportForegroundService.kt`
+  `ExportActivity`内のコルーチンで実行していた書き出し処理を、専用のフォアグラウンド
+  サービスに移動。これにより、書き出し中に画面を閉じても処理が中断されない
+- 進捗は通知(`NotificationCompat`、Lowインポータンス)で表示され、`VideoExportManager`の
+  `onProgress`コールバックをそのまま通知テキストの更新に使っている
+- 同時に実行できる書き出しは1件のみ(`ExportForegroundService.isExporting`で簡易的に
+  ガード。実行中に新規リクエストが来た場合は無視される)
+- `foregroundServiceType="dataSync"`を使用(Android 10以降。Android 14以降は
+  24時間あたり合計6時間までの制限があるが、書き出し処理の用途では十分)
 
 ## 未実装(今後追加予定)
 
-- ディスプレイの時間設定OFF(疑似消灯)
-- 書き出し処理のフォアグラウンドサービス化(長時間処理の安定性向上)
+(現時点で既知の積み残しはなし。実機での動作確認を優先)

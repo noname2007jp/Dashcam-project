@@ -48,18 +48,13 @@ class DashcamForegroundService : LifecycleService() {
         const val ACTION_PAUSE = "com.example.dashcam.action.PAUSE"
         const val ACTION_RESUME = "com.example.dashcam.action.RESUME"
 
-    /**
-     * 録画(フォアグラウンドサービスとしての稼働)が現在進行中かどうか
-     * (同一プロセス内でのみ参照可能な簡易フラグ)。
-     * MainActivityが「開始」ボタン/「終了」ボタンのどちらを表示するかの判定に使う。
-     *
-     * 注意: Activityがプレビュー表示のためだけに bindService した場合
-     * (BIND_AUTO_CREATEによるサービス生成)は、録画していないので false のまま。
-     * そのため onCreate ではなく録画開始処理(onStartCommand)で true にする。
-     */
-    @Volatile
-    var isRunning: Boolean = false
-        private set
+        /**
+         * サービスが現在起動中かどうか(同一プロセス内でのみ参照可能な簡易フラグ)。
+         * MainActivityが「自動開始せず、既に起動中ならバインドのみ行う」判定に使う。
+         */
+        @Volatile
+        var isRunning: Boolean = false
+            private set
     }
 
     private var recorder: DashcamRecorder? = null
@@ -101,16 +96,6 @@ class DashcamForegroundService : LifecycleService() {
         recorder?.setPreviewSurfaceProvider(surfaceProvider)
     }
 
-    /**
-     * カメラとプレビューだけを準備する(録画は開始しない)。
-     * Activityが起動時にバインドした際に呼び出され、アプリ起動直後から
-     * カメラ映像(画角調整用プレビュー)を表示できるようにする。
-     */
-    fun ensureCameraPrepared() {
-        createRecorder()
-        recorder?.initialize()
-    }
-
     /** Activityが非表示になったときに呼び出し、プレビュー描画を止める。 */
     fun detachPreviewSurfaceProvider() {
         recorder?.setPreviewSurfaceProvider(null)
@@ -118,7 +103,8 @@ class DashcamForegroundService : LifecycleService() {
 
     /**
      * プレビューのtargetRotationを、Activity側の実際のDisplay.rotationに
-     * 合わせて設定する。画面の向きが変わるたびにMainActivityから呼び出される。
+     * 合わせて設定する。Activity起動時・画面回転によるActivity再生成時に
+     * 呼び出す想定。
      */
     fun setPreviewTargetRotation(rotation: Int) {
         recorder?.setPreviewTargetRotation(rotation)
@@ -126,10 +112,7 @@ class DashcamForegroundService : LifecycleService() {
 
     override fun onCreate() {
         super.onCreate()
-        // ここでは isRunning = true にしない。
-        // Activityがプレビュー表示のためだけにバインドした場合(BIND_AUTO_CREATE)も
-        // onCreate は呼ばれるため、ここで true にすると録画していないのに
-        // 「一時停止/終了」ボタンが出てしまう。
+        isRunning = true
         createNotificationChannel()
         voiceAlertManager = VoiceAlertManager(this)
     }
@@ -151,7 +134,6 @@ class DashcamForegroundService : LifecycleService() {
                 return START_STICKY
             }
             else -> {
-                isRunning = true
                 startForegroundWithNotification()
                 acquireWakeLock()
                 // MetadataRecorderはrecorderの最初のセグメント開始(onSegmentStarted)より
@@ -393,13 +375,9 @@ class DashcamForegroundService : LifecycleService() {
         shockDetector = null
     }
 
-    /**
-     * DashcamRecorder と、それに付随するストレージ管理・動体検知を生成する。
-     * 生成のみで録画は開始しない(プレビュー表示のためのバインドでも呼ばれる)。
-     */
-    private fun createRecorder() {
+    private fun startRecorder() {
         if (recorder != null) {
-            Log.d(TAG, "Recorderは生成済みです")
+            Log.w(TAG, "既にRecorderが起動しています")
             return
         }
 
@@ -511,14 +489,6 @@ class DashcamForegroundService : LifecycleService() {
             }
         )
 
-    }
-
-    /**
-     * カメラを準備して常時ループ録画を開始する。
-     * プレビュー用に既に生成済み(createRecorder済み)の場合は初期化をスキップする。
-     */
-    private fun startRecorder() {
-        createRecorder()
         recorder?.initialize()
         // 初期状態は走行中とみなして常時録画を開始する。
         // DrivingStateDetectorの判定が確定し次第、駐車中であれば自動的に停止される。

@@ -6,20 +6,16 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
-import android.content.res.Configuration
-import android.hardware.display.DisplayManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
-import android.view.Surface
 import android.view.View
+import android.view.WindowManager
 import android.widget.Button
-import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
@@ -28,28 +24,18 @@ import androidx.appcompat.widget.Toolbar
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import com.example.dashcam.service.DashcamForegroundService
+import com.example.dashcam.settings.SettingsManager
 
 /**
  * 起動用Activity。
- *
  * 画面下部の「開始」ボタンを押したときにのみ、パーミッション確認のうえ
- * フォアグラウンドサービスを起動して録画を開始する(自動開始はしない)。
- * ただし**カメラのプレビュー表示はアプリ起動直後から行う**(録画のON/OFFとは独立)。
+ * フォアグラウンドサービスを起動する(自動開始はしない)。
  * 画面右上のメニュー(三本線)から設定画面(保存先フォルダ等)へ遷移できる。
  * プレビュー上をタップするとツールバー(紫のバー)の表示/非表示を切り替えられる。
  *
- * プレビューの回転について(重要):
- * プレビューの映像の向きは、最終的にCameraXの `Preview.targetRotation` で決まる。
- * 一方 `PreviewView` は自身の `Display.rotation` とセンサー角度から表示変換を作るが、
- * `targetRotation` は自分では設定しない。したがって両者が食い違うと、
- * 「プレビューだけが縦長になる/右が上になる」といった症状が出る。
- * そのため本Activityは
- *  1. バインド直後(onServiceConnected)
- *  2. DisplayListener(onDisplayChanged)
- *  3. onConfigurationChanged
- * の3経路で `syncPreviewRotation()` を呼び、常に現在の画面の向きをPreviewへ同期する。
- * 特に90度↔270度の入れ替わり(ランドスケープ反転)ではActivityの構成変更自体が
- * 発生しないため、DisplayListenerによる検知が必須になる。
+ * 設置時の画角調整用に、Activityが表示されている間だけカメラのプレビュー映像を
+ * PreviewViewに表示する。録画自体はサービス側で継続しており、Activityの表示・非表示は
+ * 録画のON/OFFには影響しない。
  *
  * bindService/unbindServiceはonStart/onStopで対にして呼び出す(標準パターン)。
  * isBoundはbindService呼び出し時点で立て、onServiceConnectedのコールバックを
@@ -57,57 +43,31 @@ import com.example.dashcam.service.DashcamForegroundService
  */
 class MainActivity : AppCompatActivity() {
 
-    companion object {
-        private const val TAG = "MainActivity"
-        private const val PREVIEW_HINT = "設置時の画角調整用プレビューです"
-        private const val PREVIEW_HINT_NEED_PERMISSION = "カメラの許可が必要です(プレビューを表示できません)"
-
-        /** サービス停止直後にプレビュー表示を復帰させるための待ち時間 */
-        private const val PREVIEW_REBIND_DELAY_MS = 400L
-    }
-
     private var boundService: DashcamForegroundService? = null
     private var isBound = false
     private lateinit var previewView: PreviewView
     private lateinit var toolbar: Toolbar
-    private lateinit var textStatus: TextView
     private lateinit var buttonStart: Button
     private lateinit var buttonPauseResume: Button
     private lateinit var buttonStop: Button
+    private lateinit var blackoutOverlay: View
+    private lateinit var settingsManager: SettingsManager
 
     // 「開始」ボタン押下時に権限が無かった場合、権限取得後に自動で開始処理へ進めるためのフラグ
     private var startRequestedAfterPermission = false
 
-    private val displayManager: DisplayManager by lazy {
-        getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-    }
-
-    /**
-     * 画面の向き(Display.rotation)の変化を検知するリスナー。
-     * ランドスケープの左右反転(90度↔270度)では構成変更が発生しないため、
-     * このリスナーが無いとプレビューの回転が古いまま固定されてしまう。
-     */
-    private val displayListener = object : DisplayManager.DisplayListener {
-        override fun onDisplayAdded(displayId: Int) = Unit
-        override fun onDisplayRemoved(displayId: Int) = Unit
-        override fun onDisplayChanged(displayId: Int) {
-            if (displayId == previewView.display?.displayId) {
-                syncPreviewRotation()
-            }
-        }
-    }
+    // 画面の疑似消灯(一定時間操作がないと輝度を下げて黒オーバーレイを表示する)
+    private val screenTimeoutHandler = Handler(Looper.getMainLooper())
+    private val pseudoOffRunnable = Runnable { applyPseudoOff() }
+    private var isPseudoOff = false
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, service: IBinder) {
             val binder = service as DashcamForegroundService.LocalBinder
-            val svc = binder.getService()
-            boundService = svc
-            // 録画が未開始(バインドのみ)でもプレビューを出すため、
-            // カメラとプレビューだけを先に準備させる。録画は開始されない。
-            svc.ensureCameraPrepared()
+            boundService = binder.getService()
             attachPreview()
             updatePauseButtonText()
-            updateUiForRunningState(DashcamForegroundService.isRunning)
+            updateUiForRunningState(true)
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
@@ -136,18 +96,13 @@ class MainActivity : AppCompatActivity() {
         if (allGranted) {
             if (startRequestedAfterPermission) {
                 beginRecording()
-            } else {
-                // 起動時のプレビュー表示のためのバインド(録画は開始しない)
-                if (!isBound) bindToDashcamService()
             }
-            updatePermissionHint(true)
         } else {
             Toast.makeText(
                 this,
                 "録画には全てのパーミッションの許可が必要です",
                 Toast.LENGTH_LONG
             ).show()
-            updatePermissionHint(false)
         }
         startRequestedAfterPermission = false
     }
@@ -156,10 +111,18 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        settingsManager = SettingsManager(this)
+
         toolbar = findViewById(R.id.toolbar)
         setSupportActionBar(toolbar)
         previewView = findViewById(R.id.previewView)
-        textStatus = findViewById(R.id.textStatus)
+        blackoutOverlay = findViewById(R.id.blackoutOverlay)
+
+        // 疑似消灯中にタップされたら復帰する
+        blackoutOverlay.setOnClickListener {
+            cancelPseudoOff()
+            schedulePseudoOff()
+        }
 
         // プレビュー部分をタップするとツールバーの表示/非表示を切り替える
         previewView.setOnClickListener {
@@ -190,44 +153,24 @@ class MainActivity : AppCompatActivity() {
             confirmAndStopDashcam()
         }
 
-        // 自動録画開始はしない。既に起動中(バックグラウンドから復帰等)なら
+        // 自動開始はしない。既に起動中(バックグラウンドから復帰等)なら
         // onStart() でバインドして状態を復元する。
         updateUiForRunningState(DashcamForegroundService.isRunning)
-
-        // 起動直後からプレビューを出すため、未許可なら起動時に権限を要求する
-        // (許可されたら permissionLauncher のコールバックでバインドしてプレビュー表示)
-        if (!hasAllPermissions()) {
-            updatePermissionHint(false)
-            startRequestedAfterPermission = false
-            permissionLauncher.launch(requiredPermissions)
-        } else {
-            updatePermissionHint(true)
-        }
     }
 
     override fun onStart() {
         super.onStart()
-        // 画面の向きの変化を監視する(90度↔270度の反転検知に必須)
-        displayManager.registerDisplayListener(displayListener, Handler(Looper.getMainLooper()))
-
-        // 録画中かどうかに関わらずバインドする。
-        // バインドのみ(録画未開始)でもサービス側でカメラとプレビューが準備され、
-        // アプリ起動時からカメラ映像が表示される。
-        if (hasAllPermissions() && !isBound) {
+        // 既にサービスが起動中(以前「開始」した状態が続いている)なら、
+        // 新規開始はせずバインドのみ行って状態を復元する
+        if (hasAllPermissions() && DashcamForegroundService.isRunning && !isBound) {
             bindToDashcamService()
         }
         updateUiForRunningState(DashcamForegroundService.isRunning)
-    }
-
-    override fun onResume() {
-        super.onResume()
-        // レイアウト確定後・復帰時に現在の画面の向きを同期する
-        previewView.post { syncPreviewRotation() }
+        schedulePseudoOff()
     }
 
     override fun onStop() {
         super.onStop()
-        displayManager.unregisterDisplayListener(displayListener)
         // Activityが表示されなくなったらプレビュー描画は止める(録画自体は継続)
         boundService?.detachPreviewSurfaceProvider()
         if (isBound) {
@@ -235,15 +178,48 @@ class MainActivity : AppCompatActivity() {
             isBound = false
             boundService = null
         }
+        cancelPseudoOff()
     }
 
     /**
-     * Activityが再生成されずに構成変更を処理するケース(マルチウィンドウ等)。
-     * 画面の向きが変わったら必ずプレビューの回転を同期し直す。
+     * Androidが画面へのタッチ/キー操作のたびに呼び出すコールバック。
+     * これを使って疑似消灯までのタイマーをリセットし、消灯中であれば復帰させる。
      */
-    override fun onConfigurationChanged(newConfig: Configuration) {
-        super.onConfigurationChanged(newConfig)
-        previewView.post { syncPreviewRotation() }
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        if (isPseudoOff) {
+            wakeFromPseudoOff()
+        }
+        schedulePseudoOff()
+    }
+
+    /** 設定された時間が経過したら疑似消灯するようタイマーを(再)設定する */
+    private fun schedulePseudoOff() {
+        cancelPseudoOff()
+        val timeoutSeconds = settingsManager.screenTimeoutSeconds ?: return // 無効化設定
+        screenTimeoutHandler.postDelayed(pseudoOffRunnable, timeoutSeconds * 1000L)
+    }
+
+    private fun cancelPseudoOff() {
+        screenTimeoutHandler.removeCallbacks(pseudoOffRunnable)
+    }
+
+    /** 輝度を最小にして黒いオーバーレイを表示する(疑似消灯) */
+    private fun applyPseudoOff() {
+        isPseudoOff = true
+        blackoutOverlay.visibility = View.VISIBLE
+        val params = window.attributes
+        params.screenBrightness = 0.01f
+        window.attributes = params
+    }
+
+    /** 輝度・オーバーレイを元に戻す */
+    private fun wakeFromPseudoOff() {
+        isPseudoOff = false
+        blackoutOverlay.visibility = View.GONE
+        val params = window.attributes
+        params.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        window.attributes = params
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
@@ -271,10 +247,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun updatePermissionHint(granted: Boolean) {
-        textStatus.text = if (granted) PREVIEW_HINT else PREVIEW_HINT_NEED_PERMISSION
-    }
-
     /** 「開始」ボタンから呼ばれる。パーミッションが揃っている前提でサービスを開始する。 */
     private fun beginRecording() {
         startDashcamService()
@@ -299,25 +271,12 @@ class MainActivity : AppCompatActivity() {
         isBound = true
     }
 
-    /**
-     * 現在の画面の向きをプレビューへ同期する。
-     *
-     * 以前はバインド時の1回だけ設定していたため、画面を回転させても
-     * プレビューの回転が古いままになり「縦長の映像になる」不具合が出ていた。
-     * DisplayListener / onConfigurationChanged / onResume から毎回呼ぶ。
-     */
-    private fun syncPreviewRotation() {
-        // Viewがまだウィンドウにアタッチされていないと display は null になる。
-        // ここで ROTATION_0 等の既定値にフォールバックすると、誤った回転で
-        // 固定されてしまうため、未アタッチ時は何もしない(後続のコールバックで同期される)。
-        val display = previewView.display ?: return
-        boundService?.setPreviewTargetRotation(display.rotation)
-        Log.d(TAG, "プレビューの回転を同期: display.rotation=${display.rotation}")
-    }
-
-    /** プレビューの描画先と回転をサービスへ渡す。 */
     private fun attachPreview() {
-        syncPreviewRotation()
+        // Activity(=この画面)の実際のDisplayの向きに合わせてプレビューの回転を設定する。
+        // 画面回転でActivityが再生成されるたびにこの関数が呼ばれるため、常に
+        // そのときの実際の画面の向きに同期する。
+        val displayRotation = previewView.display?.rotation ?: android.view.Surface.ROTATION_0
+        boundService?.setPreviewTargetRotation(displayRotation)
         boundService?.attachPreviewSurfaceProvider(previewView.surfaceProvider)
     }
 
@@ -366,13 +325,6 @@ class MainActivity : AppCompatActivity() {
                     boundService = null
                 }
                 updateUiForRunningState(false)
-                // 録画終了後も「設置時の画角調整用プレビュー」は出したままにしたいので、
-                // サービスが完全に破棄されたあとにバインドし直してカメラ映像を復帰させる
-                previewView.postDelayed({
-                    if (!isFinishing && hasAllPermissions() && !isBound) {
-                        bindToDashcamService()
-                    }
-                }, PREVIEW_REBIND_DELAY_MS)
             }
             .setNegativeButton("キャンセル", null)
             .show()

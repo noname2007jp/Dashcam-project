@@ -22,6 +22,7 @@ class SettingsManager(context: Context) {
         private const val KEY_SHOCK_DRIVING_THRESHOLD = "shock_driving_threshold_g"
         private const val KEY_SHOCK_PARKING_THRESHOLD = "shock_parking_threshold_g"
         private const val KEY_TAILGATING_THRESHOLD = "tailgating_threshold_g"
+        private const val KEY_SCREEN_TIMEOUT_SECONDS = "screen_timeout_seconds"
 
         // ShockDetector/TailgatingDetector側の初期値と合わせている
         const val DEFAULT_SHOCK_DRIVING_THRESHOLD_G = 0.5f
@@ -89,5 +90,23 @@ class SettingsManager(context: Context) {
         get() = prefs.getFloat(KEY_TAILGATING_THRESHOLD, DEFAULT_TAILGATING_THRESHOLD_G)
         set(value) {
             prefs.edit().putFloat(KEY_TAILGATING_THRESHOLD, value).apply()
+        }
+
+    /**
+     * 画面を疑似消灯(輝度最小+黒オーバーレイ)するまでの無操作時間(秒)。
+     * 未設定(null)の場合は消灯しない(常時点灯)。
+     */
+    var screenTimeoutSeconds: Int?
+        get() = if (prefs.contains(KEY_SCREEN_TIMEOUT_SECONDS)) {
+            prefs.getInt(KEY_SCREEN_TIMEOUT_SECONDS, 0)
+        } else {
+            null
+        }
+        set(value) {
+            if (value == null) {
+                prefs.edit().remove(KEY_SCREEN_TIMEOUT_SECONDS).apply()
+            } else {
+                prefs.edit().putInt(KEY_SCREEN_TIMEOUT_SECONDS, value).apply()
+            }
         }
 }

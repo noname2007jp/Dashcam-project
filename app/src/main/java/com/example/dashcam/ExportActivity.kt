@@ -1,15 +1,17 @@
 package com.example.dashcam
 
 import android.content.ContentUris
+import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import android.provider.OpenableColumns
-import android.view.View
 import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import com.example.dashcam.export.ExportForegroundService
 import com.example.dashcam.export.ExportOptions
 import com.example.dashcam.export.VideoExportManager
 import kotlinx.coroutines.Dispatchers
@@ -22,13 +24,16 @@ import kotlinx.coroutines.withContext
  *
  * 動画の選択はSAF(ACTION_OPEN_DOCUMENT)で行う。対応するメタデータJSONは
  * 同じ相対パス・同じベースファイル名から自動的に探す(見つからなければ焼き込み内容は空)。
+ *
+ * 書き出し処理自体は ExportForegroundService に委譲する。これにより、
+ * この画面を閉じても(数十秒〜数分かかる)書き出し処理が中断されず、
+ * 進捗は通知で確認できる。
  */
 class ExportActivity : AppCompatActivity() {
 
     private lateinit var textSelectedVideo: TextView
     private lateinit var buttonExport: Button
     private lateinit var textProgress: TextView
-    private lateinit var progressBar: ProgressBar
     private lateinit var checkDate: CheckBox
     private lateinit var checkLocation: CheckBox
     private lateinit var checkSpeed: CheckBox
@@ -63,12 +68,14 @@ class ExportActivity : AppCompatActivity() {
         textSelectedVideo = findViewById(R.id.textSelectedVideo)
         buttonExport = findViewById(R.id.buttonExport)
         textProgress = findViewById(R.id.textProgress)
-        progressBar = findViewById(R.id.progressBar)
         checkDate = findViewById(R.id.checkDate)
         checkLocation = findViewById(R.id.checkLocation)
         checkSpeed = findViewById(R.id.checkSpeed)
         spinnerPosition = findViewById(R.id.spinnerPosition)
         radioGroupOrientation = findViewById(R.id.radioGroupOrientation)
+
+        // 進捗バーはフォアグラウンドサービス側の通知で確認する運用に変更したため非表示にする
+        findViewById<ProgressBar>(R.id.progressBar).visibility = android.view.View.GONE
 
         spinnerPosition.adapter = ArrayAdapter(
             this, android.R.layout.simple_spinner_dropdown_item,
@@ -83,6 +90,10 @@ class ExportActivity : AppCompatActivity() {
 
         buttonExport.setOnClickListener {
             startExport()
+        }
+
+        if (ExportForegroundService.isExporting) {
+            textProgress.text = "既に別の書き出しが進行中です。完了を通知でお待ちください。"
         }
     }
 
@@ -113,6 +124,11 @@ class ExportActivity : AppCompatActivity() {
     }
 
     private fun startExport() {
+        if (ExportForegroundService.isExporting) {
+            Toast.makeText(this, "既に書き出し処理が実行中です", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         val videoUri = selectedVideoUri ?: return
         val displayName = selectedVideoDisplayName ?: "output.mp4"
 
@@ -129,44 +145,37 @@ class ExportActivity : AppCompatActivity() {
             VideoExportManager.OutputOrientation.LANDSCAPE
         }
 
-        buttonExport.isEnabled = false
-        progressBar.visibility = View.VISIBLE
-        textProgress.text = "準備中..."
+        textProgress.text = "メタデータを確認中..."
 
         lifecycleScope.launch {
             val metadataUri = withContext(Dispatchers.IO) { findMetadataJsonUri(displayName) }
-            if (metadataUri == null) {
-                textProgress.text = "対応するメタデータが見つかりません(日時・位置なしで焼き込みます)"
+
+            val intent = Intent(this@ExportActivity, ExportForegroundService::class.java).apply {
+                action = ExportForegroundService.ACTION_START_EXPORT
+                putExtra(ExportForegroundService.EXTRA_SOURCE_URI, videoUri)
+                putExtra(ExportForegroundService.EXTRA_SOURCE_DISPLAY_NAME, displayName)
+                if (metadataUri != null) {
+                    putExtra(ExportForegroundService.EXTRA_METADATA_URI, metadataUri)
+                }
+                putExtra(ExportForegroundService.EXTRA_SHOW_DATE, options.showDate)
+                putExtra(ExportForegroundService.EXTRA_SHOW_LOCATION, options.showLocation)
+                putExtra(ExportForegroundService.EXTRA_SHOW_SPEED, options.showSpeed)
+                putExtra(ExportForegroundService.EXTRA_POSITION, options.position.name)
+                putExtra(ExportForegroundService.EXTRA_ORIENTATION, orientation.name)
             }
 
-            val manager = VideoExportManager(this@ExportActivity)
-            val result = manager.export(
-                sourceVideoUri = videoUri,
-                sourceDisplayName = displayName,
-                metadataJsonUri = metadataUri,
-                options = options,
-                outputOrientation = orientation,
-                onProgress = { message ->
-                    runOnUiThread { textProgress.text = message }
-                }
-            )
-
-            progressBar.visibility = View.GONE
-            buttonExport.isEnabled = true
-
-            when (result) {
-                is VideoExportManager.Result.Success -> {
-                    textProgress.text = "書き出し完了: ${result.displayName}\n" +
-                        "(Download/cam/dashcam_export に保存されました)"
-                    Toast.makeText(this@ExportActivity, "書き出しが完了しました", Toast.LENGTH_LONG)
-                        .show()
-                }
-                is VideoExportManager.Result.Failure -> {
-                    textProgress.text = "書き出しに失敗しました: ${result.error.message}"
-                    Toast.makeText(this@ExportActivity, "書き出しに失敗しました", Toast.LENGTH_LONG)
-                        .show()
-                }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
             }
+
+            textProgress.text = if (metadataUri == null) {
+                "書き出しを開始しました(対応するメタデータが見つからないため、日時・位置なしで焼き込みます)。\n進捗は通知で確認できます。この画面を閉じても処理は継続します。"
+            } else {
+                "書き出しを開始しました。進捗は通知で確認できます。この画面を閉じても処理は継続します。"
+            }
+            Toast.makeText(this@ExportActivity, "書き出しを開始しました", Toast.LENGTH_SHORT).show()
         }
     }
 }

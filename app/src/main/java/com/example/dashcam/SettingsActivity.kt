@@ -45,11 +45,22 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var seekTailgating: SeekBar
     private lateinit var textTailgatingValue: TextView
 
+    private lateinit var spinnerScreenTimeout: Spinner
+
     private var lensOptions: List<CameraLensHelper.ZoomLensOption> = emptyList()
 
     // SeekBarのprogress(0始まり)からG値(0.1刻み)への変換: value = MIN + progress * STEP
     private val thresholdStep = 0.1f
     private val thresholdMin = 0.1f
+
+    private val screenTimeoutOptions = listOf(
+        "常時点灯(OFFにしない)" to null,
+        "30秒" to 30,
+        "1分" to 60,
+        "3分" to 180,
+        "5分" to 300,
+        "10分" to 600
+    )
 
     private val capacityOptions = listOf(
         "無制限" to null,
@@ -131,6 +142,7 @@ class SettingsActivity : AppCompatActivity() {
         textShockParkingValue = findViewById(R.id.textShockParkingValue)
         seekTailgating = findViewById(R.id.seekTailgating)
         textTailgatingValue = findViewById(R.id.textTailgatingValue)
+        spinnerScreenTimeout = findViewById(R.id.spinnerScreenTimeout)
 
         findViewById<Button>(R.id.buttonChooseFolder).setOnClickListener {
             folderPickerLauncher.launch(null)
@@ -146,6 +158,34 @@ class SettingsActivity : AppCompatActivity() {
         loadLensOptions()
         setupCapacitySpinner()
         setupThresholdSliders()
+        setupScreenTimeoutSpinner()
+    }
+
+    private fun setupScreenTimeoutSpinner() {
+        spinnerScreenTimeout.adapter = ArrayAdapter(
+            this, android.R.layout.simple_spinner_dropdown_item,
+            screenTimeoutOptions.map { it.first }
+        )
+
+        val currentSeconds = settingsManager.screenTimeoutSeconds
+        val currentIndex = screenTimeoutOptions.indexOfFirst { it.second == currentSeconds }
+        spinnerScreenTimeout.setSelection(if (currentIndex >= 0) currentIndex else 0)
+
+        spinnerScreenTimeout.post {
+            spinnerScreenTimeout.onItemSelectedListener =
+                object : android.widget.AdapterView.OnItemSelectedListener {
+                    override fun onItemSelected(
+                        parent: android.widget.AdapterView<*>?,
+                        view: android.view.View?,
+                        position: Int,
+                        id: Long
+                    ) {
+                        settingsManager.screenTimeoutSeconds = screenTimeoutOptions[position].second
+                    }
+
+                    override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+                }
+        }
     }
 
     private fun setupCapacitySpinner() {
