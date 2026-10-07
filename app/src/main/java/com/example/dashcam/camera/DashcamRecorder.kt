@@ -12,6 +12,9 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.core.UseCase
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.MediaStoreOutputOptions
 import androidx.camera.video.Quality
@@ -95,6 +98,10 @@ class DashcamRecorder(
     private var videoCapture: VideoCapture<Recorder>? = null
     private var preview: Preview? = null
 
+    /** initialize()の多重実行を防ぐフラグ(バインドのみ起動→録画開始の順で呼ばれるため) */
+    @Volatile
+    private var initialized = false
+
     /**
      * 端末の物理的な向きを監視し、Preview/VideoCaptureのtargetRotationを追従させる。
      * サービス側でカメラをバインドしているため、Activityの画面回転とは独立して
@@ -125,12 +132,22 @@ class DashcamRecorder(
 
     /** カメラを初期化し、バインドする。呼び出し後 startLoopRecording() で録画開始。 */
     fun initialize() {
+        // 既に初期化済みなら何もしない。
+        // Activityがバインドのみでサービスを生成した場合(プレビュー表示のみ)にも
+        // 呼ばれるため、二重バインドでプレビューが切れないようにする。
+        if (initialized) {
+            Log.d(TAG, "カメラは初期化済みのためスキップします")
+            return
+        }
+        initialized = true
+
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
             try {
                 val cameraProvider = cameraProviderFuture.get()
                 bindCamera(cameraProvider)
             } catch (e: Exception) {
+                initialized = false // 失敗時は再試行できるようにフラグを戻す
                 Log.e(TAG, "カメラ初期化失敗", e)
                 listener.onCameraInitFailed(e)
             }
@@ -148,15 +165,38 @@ class DashcamRecorder(
             .build()
 
         videoCapture = VideoCapture.withOutput(recorder)
-        preview = Preview.Builder().build()
+
+        // プレビューは録画(FHD=16:9)と同じアスペクト比に揃える。
+        // 揃えないと、プレビューで見えている画角と実際に録画される画角が
+        // 食い違い、画角調整の役に立たない(PreviewViewのFILL_CENTERでは
+        // 端がクロップされて見える範囲も狭くなる)。
+        preview = Preview.Builder()
+            .setResolutionSelector(
+                ResolutionSelector.Builder()
+                    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+                    .build()
+            )
+            .build()
 
         val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA // アウトカメラのみ
 
         // motionDetector が渡されている場合、動体検知用の低解像度フレームを
         // 供給する ImageAnalysis ユースケースも併せてバインドする
         val imageAnalysis = motionDetector?.let { detector ->
+            // setTargetResolution() は非推奨のため ResolutionSelector を使用する。
+            // 解析用途なので低解像度(640x480上限、16:9に追従)に抑えて負荷を下げる。
             ImageAnalysis.Builder()
-                .setTargetResolution(Size(320, 240))
+                .setResolutionSelector(
+                    ResolutionSelector.Builder()
+                        .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+                        .setResolutionStrategy(
+                            ResolutionStrategy(
+                                Size(640, 480),
+                                ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER
+                            )
+                        )
+                        .build()
+                )
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
                 .apply { setAnalyzer(cameraExecutor, detector) }
@@ -192,12 +232,13 @@ class DashcamRecorder(
      * targetRotationを更新する。録画はActivityが非表示の間もバックグラウンドで
      * 継続するため、画面の状態に依存しないセンサーベースの検知が必要。
      *
-     * 注意: Preview(画面プレビュー)側は、ここでは更新しない。PreviewViewは
-     * Activityの実際の画面の向き(Display.rotation)に基づいて内部で補正を
-     * 行う仕組みを持っているため、センサーの生角度でPreview側も上書きすると
-     * 二重に回転がかかってプレビューが歪む(縦に伸びる等)原因になる。
-     * Previewの向きは setPreviewTargetRotation() で別途、Activity側の
-     * Display.rotationに合わせて設定すること。
+     * 注意: Preview(画面プレビュー)側は、ここでは更新しない。
+     * 録画はActivityが非表示(画面消灯)の間も継続するためセンサー基準が必要だが、
+     * 画面に映るプレビューは「実際の画面の向き」に一致している必要がある。
+     * センサーの生角度でPreview側も上書きすると、画面の向きと食い違って
+     * プレビューが縦長に見える等の不具合につながる。
+     * そのためPreviewの向きは setPreviewTargetRotation() に分離し、
+     * Activity側(MainActivity)が Display.rotation を渡して同期する。
      */
     private fun startOrientationTracking() {
         if (orientationEventListener != null) return
@@ -230,12 +271,17 @@ class DashcamRecorder(
 
     /**
      * プレビューのtargetRotationを設定する。Activity側(MainActivity)が、
-     * 自身が表示されているDisplayの実際の回転状態(previewView.display.rotation)を
-     * 渡して呼び出す想定。Activityが回転して再生成されるたびに呼び出すことで、
-     * プレビューが常にその時点の画面の向きと一致した状態で表示される。
+     * 自身が表示されているDisplayの実際の回転状態(display.rotation)を渡して呼び出す。
+     *
+     * Activityが表示されている間は、画面の向きが変わるたび
+     * (DisplayListener / onConfigurationChanged / onResume)に呼ばれる。
+     * 同じ値での再設定はスキップして無駄な再構成を避ける。
      */
     fun setPreviewTargetRotation(rotation: Int) {
-        preview?.targetRotation = rotation
+        val currentPreview = preview ?: return
+        if (currentPreview.targetRotation == rotation) return
+        currentPreview.targetRotation = rotation
+        Log.i(TAG, "PreviewのtargetRotationを更新: $rotation")
     }
 
     /**
@@ -432,5 +478,10 @@ class DashcamRecorder(
     fun release() {
         stopRecording()
         stopOrientationTracking()
+        // プレビューの描画先を外しておく(解放後に古いSurfaceProviderへ描画しないため)
+        preview?.setSurfaceProvider(null)
+        preview = null
+        videoCapture = null
+        initialized = false
     }
 }

@@ -1,0 +1,1872 @@
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..bd0cfee
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,15 @@
++*.iml
++.gradle/
++/local.properties
++/.idea/
++.DS_Store
++/build
++/app/build
++/captures
++.externalNativeBuild
++.cxx
++local.properties
++*.apk
++*.aab
++*.jks
++*.keystore
+diff --git a/CHANGES.md b/CHANGES.md
+new file mode 100644
+index 0000000..984f4c8
+--- /dev/null
++++ b/CHANGES.md
+@@ -0,0 +1,109 @@
++# 変更点まとめ(2026-10-07)
++
++対象: **プレビュー映像の向き不具合の修正** + **アプリ起動時からのプレビュー表示**
++
++---
++
++## 1. 症状(修正前)
++
++| # | 症状 |
++|---|---|
++| 1 | 縦で起動 → 横に向けるとプレビュー画像が縦長になる |
++| 2 | 右下の横向き回転マークを押すと、右が上になった縦長の映像になる |
++| 3 | 横で起動しても縦で起動しても同じ挙動(起動時の向きに関係なく再現) |
++| 4 | 録画ファイル自体は正常(プレビュー表示だけの問題) |
++
++---
++
++## 2. 原因
++
++プレビューの回転は最終的に CameraX の `Preview.targetRotation` で決まるが、この値が
++**バインド時の1回だけ設定され、その後まったく更新されていなかった**。
++
++- `PreviewView` は自身の `Display.rotation` とセンサー角度から表示変換を組み立てるが、
++  `Preview.targetRotation` は自分では設定しない(AndroidX の `PreviewView.java` で確認)。
++- したがって `targetRotation` と `Display.rotation` が90度ずれると、
++  **プレビューだけが縦長・右が上**に見える。録画側は `OrientationEventListener` で
++  独立に更新しているため正常に見える(症状4と一致)。
++- `android:screenOrientation="fullSensor"` のため、**90度↔270度(ランドスケープ左右反転)の
++  切り替えではActivityの構成変更が発生しない**。`onCreate` / `onServiceConnected` に
++  依存した同期では追従できないケースが残る(症状3と一致)。
++- さらに `previewView.display` が未アタッチ時に `null` となり、`?: ROTATION_0` で
++  **黙って縦(0)に固定**される経路があった(横起動時に壊れる要因)。
++
++---
++
++## 3. 修正内容(ファイル別)
++
++### 3-1. `app/src/main/java/com/example/dashcam/MainActivity.kt`
++
++| 修正 | 内容 |
++|---|---|
++| 修正A(必須) | `DisplayManager.DisplayListener` を追加。`onDisplayChanged` で `syncPreviewRotation()` を呼ぶ。90度↔270度の反転検知に必須 |
++| 修正A(必須) | `onResume` / `onConfigurationChanged` でも `syncPreviewRotation()` を呼び、3経路で同期 |
++| 修正A(必須) | `syncPreviewRotation()` は `previewView.display ?: return` とし、**未アタッチ時に既定値で固定しない**よう変更(従来の `?: ROTATION_0` を廃止) |
++| 追加要件 | `onStart()` で、**録画中かどうかに関わらず**バインドするよう変更(起動時からプレビューを出すため) |
++| 追加要件 | 起動時に権限が無ければ権限ダイアログを表示し、許可後に自動バインドしてプレビュー表示。拒否時は画面下部に「カメラの許可が必要です」と表示 |
++| 追加要件 | `onServiceConnected` で `ensureCameraPrepared()` を呼び、録画を開始せずカメラ/プレビューだけ準備 |
++| 追加要件 | 「終了」で録画を止めたあと、プレビュー復帰のため再バインド(400ms後) |
++| 付随修正 | `onServiceConnected` の `updateUiForRunningState(true)` を `DashcamForegroundService.isRunning` 基準に修正(プレビュー用バインドで誤って「一時停止/終了」ボタンが出るのを防ぐ) |
++
++### 3-2. `app/src/main/java/com/example/dashcam/camera/DashcamRecorder.kt`
++
++| 修正 | 内容 |
++|---|---|
++| 修正B | `setPreviewTargetRotation()` を冪等化(同一値ならスキップ)し、更新をログ出力 |
++| 修正D | `Preview` に `ResolutionSelector` を導入し、録画(FHD=16:9)と同じアスペクト比に統一 |
++| 修正D | `ImageAnalysis` の非推奨 `setTargetResolution(Size(320,240))` を `ResolutionSelector` + `ResolutionStrategy(640x480)` に置換 |
++| 追加要件 | `initialize()` を冪等化(`initialized` フラグ)。プレビュー用バインド→録画開始の順で呼ばれても二重バインドしない |
++| 付随修正 | `release()` で `setSurfaceProvider(null)` と参照のクリアを行う |
++
++### 3-3. `app/src/main/java/com/example/dashcam/service/DashcamForegroundService.kt`
++
++| 修正 | 内容 |
++|---|---|
++| 追加要件 | `ensureCameraPrepared()` を新設(カメラ/プレビューのみ準備、録画は開始しない) |
++| 追加要件 | `isRunning = true` を `onCreate` から `onStartCommand`(録画開始時)へ移動 |
++| 追加要件 | `startRecorder()` を「生成(createRecorder)→初期化→録画開始」に分離。プレビュー用に生成済みなら初期化をスキップ |
++
++### 3-4. `app/src/main/res/layout/activity_main.xml`
++
++| 修正 | 内容 |
++|---|---|
++| 修正C | `PreviewView` に `app:scaleType="fitCenter"` を明示。既定の `fillCenter` は録画される画角より表示範囲が狭くなり、設置時の画角調整に使えないため |
++
++### 3-5. その他
++
++- `.gitignore` を追加(`build/`, `.gradle/`, `local.properties`, `*.apk`, キーストア等)
++- Gradle Wrapper(`gradlew`, `gradlew.bat`, `gradle/wrapper/`)を追加
++  (READMEに「同梱していない」とあったため。ローカルは `./gradlew assembleDebug` でビルド可能)
++- `README.md` を更新(画面表示の仕様変更と本変更履歴を追記)
++
++---
++
++## 4. 実機での確認ポイント
++
++1. 縦で起動 → 横に向ける → プレビューが正しい向き(横長)になること
++2. 横で起動 → 縦に向ける → 同様に正しい向きになること
++3. 横向きのまま左右を反転(180度回す)しても、常に上が上であること
++   ※この経路はActivityが再生成されないため、DisplayListenerが効いているかの確認になる
++4. アプリ起動直後(「開始」を押す前)からプレビューが出ること
++5. 「開始」を押す前は「開始」ボタンのみ、「開始」後は「一時停止」「終了」が出ること
++6. 「終了」で録画を止めたあともプレビューが表示されたままであること
++
++ログでの確認:
++
++```
++adb logcat -s MainActivity DashcamRecorder DashcamService
++```
++
++`プレビューの回転を同期: display.rotation=...` と
++`PreviewのtargetRotationを更新: ...` が、画面を回すたびに出力されれば正常。
++
++---
++
++## 5. 検証状況
++
++- `gradle assembleDebug` によるビルド: **成功**(debug APK を生成済み)
++- 実機/エミュレータでの動作確認: **未実施**(この環境に端末が無いため)
++  → 上記「4. 実機での確認ポイント」での確認をお願いします
+diff --git a/README.md b/README.md
+index 61f5e91..67a17f0 100644
+--- a/README.md
++++ b/README.md
+@@ -66,12 +66,16 @@ Gradle Wrapperを同梱していないため、初回はAndroid Studioが自動
+ 
+ ## 画面表示について
+ 
+-設置時の画角調整のため、**メイン画面表示中はカメラのプレビュー映像が表示されます**
++設置時の画角調整のため、**アプリ起動直後からカメラのプレビュー映像が表示されます**
+ (`androidx.camera.view.PreviewView`)。`DashcamForegroundService`にバインドし、
+ `Preview.SurfaceProvider`を中継する構成になっています。
+ 
++- アプリ起動時: 権限を確認して自動的にサービスへバインドし、プレビューを表示
++  (このバインドでは**録画は開始されません**。録画は「開始」ボタンを押したときのみ)
+ - Activityが表示されている間: `attachPreviewSurfaceProvider()`でプレビュー描画
+ - Activityが非表示(onStop)になったら: `detachPreviewSurfaceProvider()`で描画停止
++- 画面の向きが変わったら: `DisplayManager.DisplayListener`等から
++  `syncPreviewRotation()`を呼び、`Preview.targetRotation`をその都度同期
+ 
+ 録画自体はActivityの表示・非表示に関わらずサービス側で継続します。
+ 「走行中は画面を消してバッテリー節約」という当初の要件は、今後実装する
+@@ -259,6 +263,43 @@ Gradle Wrapperを同梱していないため、初回はAndroid Studioが自動
+    急ブレーキ(煽り運転の可能性)検知の各閾値をSeekBar(0.1G刻み)で調整できる項目を追加
+    (`SettingsManager`に保存、次回サービス起動時から反映)
+ 
++## 変更履歴(2026-10-07): プレビューの向き不具合の修正と起動時プレビュー表示
++
++### 症状と原因
++「縦で起動して横に向けるとプレビューが縦長になる」「右下の横向き回転マークを押すと
++右が上になった縦長の映像になる」という症状は、プレビューの回転情報が
++**バインド時の1回だけ設定され、その後まったく更新されていなかった**ことが原因。
++`PreviewView` は `Display.rotation` とセンサー角度から表示変換を作りますが、
++`Preview.targetRotation` は自分では設定しません。この2つが90度ずれると
++プレビューだけが縦長・回転して見えます(録画側は `OrientationEventListener` で
++独立に更新しているため正常)。
++
++また `android:screenOrientation="fullSensor"` により、**90度↔270度(ランドスケープ左右反転)
++の切り替えではActivityの構成変更が発生しない**ため、`onCreate` や
++`onServiceConnected` に頼った同期では追従できないケースが残っていました。
++
++### 修正内容
++- `MainActivity`: `DisplayManager.DisplayListener` / `onConfigurationChanged` / `onResume` の
++  3経路で `syncPreviewRotation()` を呼び、画面の向きが変わるたびに
++  `Preview.targetRotation` を同期。Viewが未アタッチ(`display == null`)のときは
++  既定値で固定せず何もしない(誤った値で固定されるのを防ぐ)
++- `DashcamRecorder.setPreviewTargetRotation()`: 同一値での再設定をスキップしてログ出力
++- `Preview` / `ImageAnalysis` に `ResolutionSelector` を導入し、プレビューを録画と同じ
++  16:9 に統一(`setTargetResolution()` は非推奨のため置き換え)
++- `PreviewView` の `scaleType` を `fitCenter` に明示(既定の `fillCenter` は
++  録画される画角より表示範囲が狭くなるため、画角調整に不適切)
++
++### 起動時からのプレビュー表示
++- `MainActivity.onStart()` で、**録画中かどうかに関わらず**サービスへバインドするように変更
++- `DashcamForegroundService.ensureCameraPrepared()` を新設し、録画を開始せずに
++  カメラとプレビューだけを準備(`DashcamRecorder.initialize()` は冪等化)
++- `isRunning` を `onCreate` ではなく録画開始時(`onStartCommand`)に立てるよう修正。
++  これにより「プレビュー表示のためのバインド」でサービスが生成されても、
++  「一時停止/終了」ボタンが誤って表示されない
++- 起動時にカメラ権限が無い場合は権限ダイアログを表示し、許可後に自動でバインドして
++  プレビューを表示。拒否時は画面下部に「カメラの許可が必要です」と表示
++- 「終了」で録画を止めたあともプレビューは復帰するようにした
++
+ ## 未実装(今後追加予定)
+ 
+ - ディスプレイの時間設定OFF(疑似消灯)
+diff --git a/app/src/main/java/com/example/dashcam/MainActivity.kt b/app/src/main/java/com/example/dashcam/MainActivity.kt
+index 4d28307..17f60b1 100644
+--- a/app/src/main/java/com/example/dashcam/MainActivity.kt
++++ b/app/src/main/java/com/example/dashcam/MainActivity.kt
+@@ -6,13 +6,20 @@ import android.content.Context
+ import android.content.Intent
+ import android.content.ServiceConnection
+ import android.content.pm.PackageManager
++import android.content.res.Configuration
++import android.hardware.display.DisplayManager
+ import android.os.Build
+ import android.os.Bundle
++import android.os.Handler
+ import android.os.IBinder
++import android.os.Looper
++import android.util.Log
+ import android.view.Menu
+ import android.view.MenuItem
++import android.view.Surface
+ import android.view.View
+ import android.widget.Button
++import android.widget.TextView
+ import android.widget.Toast
+ import androidx.activity.result.contract.ActivityResultContracts
+ import androidx.appcompat.app.AlertDialog
+@@ -24,14 +31,25 @@ import com.example.dashcam.service.DashcamForegroundService
+ 
+ /**
+  * 起動用Activity。
++ *
+  * 画面下部の「開始」ボタンを押したときにのみ、パーミッション確認のうえ
+- * フォアグラウンドサービスを起動する(自動開始はしない)。
++ * フォアグラウンドサービスを起動して録画を開始する(自動開始はしない)。
++ * ただし**カメラのプレビュー表示はアプリ起動直後から行う**(録画のON/OFFとは独立)。
+  * 画面右上のメニュー(三本線)から設定画面(保存先フォルダ等)へ遷移できる。
+  * プレビュー上をタップするとツールバー(紫のバー)の表示/非表示を切り替えられる。
+  *
+- * 設置時の画角調整用に、Activityが表示されている間だけカメラのプレビュー映像を
+- * PreviewViewに表示する。録画自体はサービス側で継続しており、Activityの表示・非表示は
+- * 録画のON/OFFには影響しない。
++ * プレビューの回転について(重要):
++ * プレビューの映像の向きは、最終的にCameraXの `Preview.targetRotation` で決まる。
++ * 一方 `PreviewView` は自身の `Display.rotation` とセンサー角度から表示変換を作るが、
++ * `targetRotation` は自分では設定しない。したがって両者が食い違うと、
++ * 「プレビューだけが縦長になる/右が上になる」といった症状が出る。
++ * そのため本Activityは
++ *  1. バインド直後(onServiceConnected)
++ *  2. DisplayListener(onDisplayChanged)
++ *  3. onConfigurationChanged
++ * の3経路で `syncPreviewRotation()` を呼び、常に現在の画面の向きをPreviewへ同期する。
++ * 特に90度↔270度の入れ替わり(ランドスケープ反転)ではActivityの構成変更自体が
++ * 発生しないため、DisplayListenerによる検知が必須になる。
+  *
+  * bindService/unbindServiceはonStart/onStopで対にして呼び出す(標準パターン)。
+  * isBoundはbindService呼び出し時点で立て、onServiceConnectedのコールバックを
+@@ -39,10 +57,20 @@ import com.example.dashcam.service.DashcamForegroundService
+  */
+ class MainActivity : AppCompatActivity() {
+ 
++    companion object {
++        private const val TAG = "MainActivity"
++        private const val PREVIEW_HINT = "設置時の画角調整用プレビューです"
++        private const val PREVIEW_HINT_NEED_PERMISSION = "カメラの許可が必要です(プレビューを表示できません)"
++
++        /** サービス停止直後にプレビュー表示を復帰させるための待ち時間 */
++        private const val PREVIEW_REBIND_DELAY_MS = 400L
++    }
++
+     private var boundService: DashcamForegroundService? = null
+     private var isBound = false
+     private lateinit var previewView: PreviewView
+     private lateinit var toolbar: Toolbar
++    private lateinit var textStatus: TextView
+     private lateinit var buttonStart: Button
+     private lateinit var buttonPauseResume: Button
+     private lateinit var buttonStop: Button
+@@ -50,13 +78,36 @@ class MainActivity : AppCompatActivity() {
+     // 「開始」ボタン押下時に権限が無かった場合、権限取得後に自動で開始処理へ進めるためのフラグ
+     private var startRequestedAfterPermission = false
+ 
++    private val displayManager: DisplayManager by lazy {
++        getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
++    }
++
++    /**
++     * 画面の向き(Display.rotation)の変化を検知するリスナー。
++     * ランドスケープの左右反転(90度↔270度)では構成変更が発生しないため、
++     * このリスナーが無いとプレビューの回転が古いまま固定されてしまう。
++     */
++    private val displayListener = object : DisplayManager.DisplayListener {
++        override fun onDisplayAdded(displayId: Int) = Unit
++        override fun onDisplayRemoved(displayId: Int) = Unit
++        override fun onDisplayChanged(displayId: Int) {
++            if (displayId == previewView.display?.displayId) {
++                syncPreviewRotation()
++            }
++        }
++    }
++
+     private val serviceConnection = object : ServiceConnection {
+         override fun onServiceConnected(name: ComponentName, service: IBinder) {
+             val binder = service as DashcamForegroundService.LocalBinder
+-            boundService = binder.getService()
++            val svc = binder.getService()
++            boundService = svc
++            // 録画が未開始(バインドのみ)でもプレビューを出すため、
++            // カメラとプレビューだけを先に準備させる。録画は開始されない。
++            svc.ensureCameraPrepared()
+             attachPreview()
+             updatePauseButtonText()
+-            updateUiForRunningState(true)
++            updateUiForRunningState(DashcamForegroundService.isRunning)
+         }
+ 
+         override fun onServiceDisconnected(name: ComponentName) {
+@@ -85,13 +136,18 @@ class MainActivity : AppCompatActivity() {
+         if (allGranted) {
+             if (startRequestedAfterPermission) {
+                 beginRecording()
++            } else {
++                // 起動時のプレビュー表示のためのバインド(録画は開始しない)
++                if (!isBound) bindToDashcamService()
+             }
++            updatePermissionHint(true)
+         } else {
+             Toast.makeText(
+                 this,
+                 "録画には全てのパーミッションの許可が必要です",
+                 Toast.LENGTH_LONG
+             ).show()
++            updatePermissionHint(false)
+         }
+         startRequestedAfterPermission = false
+     }
+@@ -103,6 +159,7 @@ class MainActivity : AppCompatActivity() {
+         toolbar = findViewById(R.id.toolbar)
+         setSupportActionBar(toolbar)
+         previewView = findViewById(R.id.previewView)
++        textStatus = findViewById(R.id.textStatus)
+ 
+         // プレビュー部分をタップするとツールバーの表示/非表示を切り替える
+         previewView.setOnClickListener {
+@@ -133,23 +190,44 @@ class MainActivity : AppCompatActivity() {
+             confirmAndStopDashcam()
+         }
+ 
+-        // 自動開始はしない。既に起動中(バックグラウンドから復帰等)なら
++        // 自動録画開始はしない。既に起動中(バックグラウンドから復帰等)なら
+         // onStart() でバインドして状態を復元する。
+         updateUiForRunningState(DashcamForegroundService.isRunning)
++
++        // 起動直後からプレビューを出すため、未許可なら起動時に権限を要求する
++        // (許可されたら permissionLauncher のコールバックでバインドしてプレビュー表示)
++        if (!hasAllPermissions()) {
++            updatePermissionHint(false)
++            startRequestedAfterPermission = false
++            permissionLauncher.launch(requiredPermissions)
++        } else {
++            updatePermissionHint(true)
++        }
+     }
+ 
+     override fun onStart() {
+         super.onStart()
+-        // 既にサービスが起動中(以前「開始」した状態が続いている)なら、
+-        // 新規開始はせずバインドのみ行って状態を復元する
+-        if (hasAllPermissions() && DashcamForegroundService.isRunning && !isBound) {
++        // 画面の向きの変化を監視する(90度↔270度の反転検知に必須)
++        displayManager.registerDisplayListener(displayListener, Handler(Looper.getMainLooper()))
++
++        // 録画中かどうかに関わらずバインドする。
++        // バインドのみ(録画未開始)でもサービス側でカメラとプレビューが準備され、
++        // アプリ起動時からカメラ映像が表示される。
++        if (hasAllPermissions() && !isBound) {
+             bindToDashcamService()
+         }
+         updateUiForRunningState(DashcamForegroundService.isRunning)
+     }
+ 
++    override fun onResume() {
++        super.onResume()
++        // レイアウト確定後・復帰時に現在の画面の向きを同期する
++        previewView.post { syncPreviewRotation() }
++    }
++
+     override fun onStop() {
+         super.onStop()
++        displayManager.unregisterDisplayListener(displayListener)
+         // Activityが表示されなくなったらプレビュー描画は止める(録画自体は継続)
+         boundService?.detachPreviewSurfaceProvider()
+         if (isBound) {
+@@ -159,6 +237,15 @@ class MainActivity : AppCompatActivity() {
+         }
+     }
+ 
++    /**
++     * Activityが再生成されずに構成変更を処理するケース(マルチウィンドウ等)。
++     * 画面の向きが変わったら必ずプレビューの回転を同期し直す。
++     */
++    override fun onConfigurationChanged(newConfig: Configuration) {
++        super.onConfigurationChanged(newConfig)
++        previewView.post { syncPreviewRotation() }
++    }
++
+     override fun onCreateOptionsMenu(menu: Menu): Boolean {
+         menuInflater.inflate(R.menu.menu_main, menu)
+         return true
+@@ -184,6 +271,10 @@ class MainActivity : AppCompatActivity() {
+         }
+     }
+ 
++    private fun updatePermissionHint(granted: Boolean) {
++        textStatus.text = if (granted) PREVIEW_HINT else PREVIEW_HINT_NEED_PERMISSION
++    }
++
+     /** 「開始」ボタンから呼ばれる。パーミッションが揃っている前提でサービスを開始する。 */
+     private fun beginRecording() {
+         startDashcamService()
+@@ -208,12 +299,25 @@ class MainActivity : AppCompatActivity() {
+         isBound = true
+     }
+ 
++    /**
++     * 現在の画面の向きをプレビューへ同期する。
++     *
++     * 以前はバインド時の1回だけ設定していたため、画面を回転させても
++     * プレビューの回転が古いままになり「縦長の映像になる」不具合が出ていた。
++     * DisplayListener / onConfigurationChanged / onResume から毎回呼ぶ。
++     */
++    private fun syncPreviewRotation() {
++        // Viewがまだウィンドウにアタッチされていないと display は null になる。
++        // ここで ROTATION_0 等の既定値にフォールバックすると、誤った回転で
++        // 固定されてしまうため、未アタッチ時は何もしない(後続のコールバックで同期される)。
++        val display = previewView.display ?: return
++        boundService?.setPreviewTargetRotation(display.rotation)
++        Log.d(TAG, "プレビューの回転を同期: display.rotation=${display.rotation}")
++    }
++
++    /** プレビューの描画先と回転をサービスへ渡す。 */
+     private fun attachPreview() {
+-        // Activity(=この画面)の実際のDisplayの向きに合わせてプレビューの回転を設定する。
+-        // 画面回転でActivityが再生成されるたびにこの関数が呼ばれるため、常に
+-        // そのときの実際の画面の向きに同期する。
+-        val displayRotation = previewView.display?.rotation ?: android.view.Surface.ROTATION_0
+-        boundService?.setPreviewTargetRotation(displayRotation)
++        syncPreviewRotation()
+         boundService?.attachPreviewSurfaceProvider(previewView.surfaceProvider)
+     }
+ 
+@@ -262,6 +366,13 @@ class MainActivity : AppCompatActivity() {
+                     boundService = null
+                 }
+                 updateUiForRunningState(false)
++                // 録画終了後も「設置時の画角調整用プレビュー」は出したままにしたいので、
++                // サービスが完全に破棄されたあとにバインドし直してカメラ映像を復帰させる
++                previewView.postDelayed({
++                    if (!isFinishing && hasAllPermissions() && !isBound) {
++                        bindToDashcamService()
++                    }
++                }, PREVIEW_REBIND_DELAY_MS)
+             }
+             .setNegativeButton("キャンセル", null)
+             .show()
+diff --git a/app/src/main/java/com/example/dashcam/camera/DashcamRecorder.kt b/app/src/main/java/com/example/dashcam/camera/DashcamRecorder.kt
+index aa72486..7b75178 100644
+--- a/app/src/main/java/com/example/dashcam/camera/DashcamRecorder.kt
++++ b/app/src/main/java/com/example/dashcam/camera/DashcamRecorder.kt
+@@ -12,6 +12,9 @@ import androidx.camera.core.CameraSelector
+ import androidx.camera.core.ImageAnalysis
+ import androidx.camera.core.Preview
+ import androidx.camera.core.UseCase
++import androidx.camera.core.resolutionselector.AspectRatioStrategy
++import androidx.camera.core.resolutionselector.ResolutionSelector
++import androidx.camera.core.resolutionselector.ResolutionStrategy
+ import androidx.camera.lifecycle.ProcessCameraProvider
+ import androidx.camera.video.MediaStoreOutputOptions
+ import androidx.camera.video.Quality
+@@ -95,6 +98,10 @@ class DashcamRecorder(
+     private var videoCapture: VideoCapture<Recorder>? = null
+     private var preview: Preview? = null
+ 
++    /** initialize()の多重実行を防ぐフラグ(バインドのみ起動→録画開始の順で呼ばれるため) */
++    @Volatile
++    private var initialized = false
++
+     /**
+      * 端末の物理的な向きを監視し、Preview/VideoCaptureのtargetRotationを追従させる。
+      * サービス側でカメラをバインドしているため、Activityの画面回転とは独立して
+@@ -125,12 +132,22 @@ class DashcamRecorder(
+ 
+     /** カメラを初期化し、バインドする。呼び出し後 startLoopRecording() で録画開始。 */
+     fun initialize() {
++        // 既に初期化済みなら何もしない。
++        // Activityがバインドのみでサービスを生成した場合(プレビュー表示のみ)にも
++        // 呼ばれるため、二重バインドでプレビューが切れないようにする。
++        if (initialized) {
++            Log.d(TAG, "カメラは初期化済みのためスキップします")
++            return
++        }
++        initialized = true
++
+         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+         cameraProviderFuture.addListener({
+             try {
+                 val cameraProvider = cameraProviderFuture.get()
+                 bindCamera(cameraProvider)
+             } catch (e: Exception) {
++                initialized = false // 失敗時は再試行できるようにフラグを戻す
+                 Log.e(TAG, "カメラ初期化失敗", e)
+                 listener.onCameraInitFailed(e)
+             }
+@@ -148,15 +165,38 @@ class DashcamRecorder(
+             .build()
+ 
+         videoCapture = VideoCapture.withOutput(recorder)
+-        preview = Preview.Builder().build()
++
++        // プレビューは録画(FHD=16:9)と同じアスペクト比に揃える。
++        // 揃えないと、プレビューで見えている画角と実際に録画される画角が
++        // 食い違い、画角調整の役に立たない(PreviewViewのFILL_CENTERでは
++        // 端がクロップされて見える範囲も狭くなる)。
++        preview = Preview.Builder()
++            .setResolutionSelector(
++                ResolutionSelector.Builder()
++                    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
++                    .build()
++            )
++            .build()
+ 
+         val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA // アウトカメラのみ
+ 
+         // motionDetector が渡されている場合、動体検知用の低解像度フレームを
+         // 供給する ImageAnalysis ユースケースも併せてバインドする
+         val imageAnalysis = motionDetector?.let { detector ->
++            // setTargetResolution() は非推奨のため ResolutionSelector を使用する。
++            // 解析用途なので低解像度(640x480上限、16:9に追従)に抑えて負荷を下げる。
+             ImageAnalysis.Builder()
+-                .setTargetResolution(Size(320, 240))
++                .setResolutionSelector(
++                    ResolutionSelector.Builder()
++                        .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
++                        .setResolutionStrategy(
++                            ResolutionStrategy(
++                                Size(640, 480),
++                                ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER
++                            )
++                        )
++                        .build()
++                )
+                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                 .build()
+                 .apply { setAnalyzer(cameraExecutor, detector) }
+@@ -192,12 +232,13 @@ class DashcamRecorder(
+      * targetRotationを更新する。録画はActivityが非表示の間もバックグラウンドで
+      * 継続するため、画面の状態に依存しないセンサーベースの検知が必要。
+      *
+-     * 注意: Preview(画面プレビュー)側は、ここでは更新しない。PreviewViewは
+-     * Activityの実際の画面の向き(Display.rotation)に基づいて内部で補正を
+-     * 行う仕組みを持っているため、センサーの生角度でPreview側も上書きすると
+-     * 二重に回転がかかってプレビューが歪む(縦に伸びる等)原因になる。
+-     * Previewの向きは setPreviewTargetRotation() で別途、Activity側の
+-     * Display.rotationに合わせて設定すること。
++     * 注意: Preview(画面プレビュー)側は、ここでは更新しない。
++     * 録画はActivityが非表示(画面消灯)の間も継続するためセンサー基準が必要だが、
++     * 画面に映るプレビューは「実際の画面の向き」に一致している必要がある。
++     * センサーの生角度でPreview側も上書きすると、画面の向きと食い違って
++     * プレビューが縦長に見える等の不具合につながる。
++     * そのためPreviewの向きは setPreviewTargetRotation() に分離し、
++     * Activity側(MainActivity)が Display.rotation を渡して同期する。
+      */
+     private fun startOrientationTracking() {
+         if (orientationEventListener != null) return
+@@ -230,12 +271,17 @@ class DashcamRecorder(
+ 
+     /**
+      * プレビューのtargetRotationを設定する。Activity側(MainActivity)が、
+-     * 自身が表示されているDisplayの実際の回転状態(previewView.display.rotation)を
+-     * 渡して呼び出す想定。Activityが回転して再生成されるたびに呼び出すことで、
+-     * プレビューが常にその時点の画面の向きと一致した状態で表示される。
++     * 自身が表示されているDisplayの実際の回転状態(display.rotation)を渡して呼び出す。
++     *
++     * Activityが表示されている間は、画面の向きが変わるたび
++     * (DisplayListener / onConfigurationChanged / onResume)に呼ばれる。
++     * 同じ値での再設定はスキップして無駄な再構成を避ける。
+      */
+     fun setPreviewTargetRotation(rotation: Int) {
+-        preview?.targetRotation = rotation
++        val currentPreview = preview ?: return
++        if (currentPreview.targetRotation == rotation) return
++        currentPreview.targetRotation = rotation
++        Log.i(TAG, "PreviewのtargetRotationを更新: $rotation")
+     }
+ 
+     /**
+@@ -432,5 +478,10 @@ class DashcamRecorder(
+     fun release() {
+         stopRecording()
+         stopOrientationTracking()
++        // プレビューの描画先を外しておく(解放後に古いSurfaceProviderへ描画しないため)
++        preview?.setSurfaceProvider(null)
++        preview = null
++        videoCapture = null
++        initialized = false
+     }
+ }
+diff --git a/app/src/main/java/com/example/dashcam/service/DashcamForegroundService.kt b/app/src/main/java/com/example/dashcam/service/DashcamForegroundService.kt
+index cc61ec1..f148826 100644
+--- a/app/src/main/java/com/example/dashcam/service/DashcamForegroundService.kt
++++ b/app/src/main/java/com/example/dashcam/service/DashcamForegroundService.kt
+@@ -48,13 +48,18 @@ class DashcamForegroundService : LifecycleService() {
+         const val ACTION_PAUSE = "com.example.dashcam.action.PAUSE"
+         const val ACTION_RESUME = "com.example.dashcam.action.RESUME"
+ 
+-        /**
+-         * サービスが現在起動中かどうか(同一プロセス内でのみ参照可能な簡易フラグ)。
+-         * MainActivityが「自動開始せず、既に起動中ならバインドのみ行う」判定に使う。
+-         */
+-        @Volatile
+-        var isRunning: Boolean = false
+-            private set
++    /**
++     * 録画(フォアグラウンドサービスとしての稼働)が現在進行中かどうか
++     * (同一プロセス内でのみ参照可能な簡易フラグ)。
++     * MainActivityが「開始」ボタン/「終了」ボタンのどちらを表示するかの判定に使う。
++     *
++     * 注意: Activityがプレビュー表示のためだけに bindService した場合
++     * (BIND_AUTO_CREATEによるサービス生成)は、録画していないので false のまま。
++     * そのため onCreate ではなく録画開始処理(onStartCommand)で true にする。
++     */
++    @Volatile
++    var isRunning: Boolean = false
++        private set
+     }
+ 
+     private var recorder: DashcamRecorder? = null
+@@ -96,6 +101,16 @@ class DashcamForegroundService : LifecycleService() {
+         recorder?.setPreviewSurfaceProvider(surfaceProvider)
+     }
+ 
++    /**
++     * カメラとプレビューだけを準備する(録画は開始しない)。
++     * Activityが起動時にバインドした際に呼び出され、アプリ起動直後から
++     * カメラ映像(画角調整用プレビュー)を表示できるようにする。
++     */
++    fun ensureCameraPrepared() {
++        createRecorder()
++        recorder?.initialize()
++    }
++
+     /** Activityが非表示になったときに呼び出し、プレビュー描画を止める。 */
+     fun detachPreviewSurfaceProvider() {
+         recorder?.setPreviewSurfaceProvider(null)
+@@ -103,8 +118,7 @@ class DashcamForegroundService : LifecycleService() {
+ 
+     /**
+      * プレビューのtargetRotationを、Activity側の実際のDisplay.rotationに
+-     * 合わせて設定する。Activity起動時・画面回転によるActivity再生成時に
+-     * 呼び出す想定。
++     * 合わせて設定する。画面の向きが変わるたびにMainActivityから呼び出される。
+      */
+     fun setPreviewTargetRotation(rotation: Int) {
+         recorder?.setPreviewTargetRotation(rotation)
+@@ -112,7 +126,10 @@ class DashcamForegroundService : LifecycleService() {
+ 
+     override fun onCreate() {
+         super.onCreate()
+-        isRunning = true
++        // ここでは isRunning = true にしない。
++        // Activityがプレビュー表示のためだけにバインドした場合(BIND_AUTO_CREATE)も
++        // onCreate は呼ばれるため、ここで true にすると録画していないのに
++        // 「一時停止/終了」ボタンが出てしまう。
+         createNotificationChannel()
+         voiceAlertManager = VoiceAlertManager(this)
+     }
+@@ -134,6 +151,7 @@ class DashcamForegroundService : LifecycleService() {
+                 return START_STICKY
+             }
+             else -> {
++                isRunning = true
+                 startForegroundWithNotification()
+                 acquireWakeLock()
+                 // MetadataRecorderはrecorderの最初のセグメント開始(onSegmentStarted)より
+@@ -375,9 +393,13 @@ class DashcamForegroundService : LifecycleService() {
+         shockDetector = null
+     }
+ 
+-    private fun startRecorder() {
++    /**
++     * DashcamRecorder と、それに付随するストレージ管理・動体検知を生成する。
++     * 生成のみで録画は開始しない(プレビュー表示のためのバインドでも呼ばれる)。
++     */
++    private fun createRecorder() {
+         if (recorder != null) {
+-            Log.w(TAG, "既にRecorderが起動しています")
++            Log.d(TAG, "Recorderは生成済みです")
+             return
+         }
+ 
+@@ -489,6 +511,14 @@ class DashcamForegroundService : LifecycleService() {
+             }
+         )
+ 
++    }
++
++    /**
++     * カメラを準備して常時ループ録画を開始する。
++     * プレビュー用に既に生成済み(createRecorder済み)の場合は初期化をスキップする。
++     */
++    private fun startRecorder() {
++        createRecorder()
+         recorder?.initialize()
+         // 初期状態は走行中とみなして常時録画を開始する。
+         // DrivingStateDetectorの判定が確定し次第、駐車中であれば自動的に停止される。
+diff --git a/app/src/main/res/layout/activity_main.xml b/app/src/main/res/layout/activity_main.xml
+index 7ebfba4..3623136 100644
+--- a/app/src/main/res/layout/activity_main.xml
++++ b/app/src/main/res/layout/activity_main.xml
+@@ -1,13 +1,21 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
++    xmlns:app="http://schemas.android.com/apk/res-auto"
+     android:layout_width="match_parent"
+     android:layout_height="match_parent"
+     android:background="#000000">
+ 
++    <!--
++        scaleType は fitCenter を指定する。
++        既定値の fillCenter は「Viewいっぱいに広げてはみ出した分を切り落とす」ため、
++        録画に写る画角より表示される範囲が狭くなり、設置時の画角調整に使えない。
++        fitCenter にすると映像全体(=録画される画角)が表示される。
++    -->
+     <androidx.camera.view.PreviewView
+         android:id="@+id/previewView"
+         android:layout_width="match_parent"
+-        android:layout_height="match_parent" />
++        android:layout_height="match_parent"
++        app:scaleType="fitCenter" />
+ 
+     <!-- ツールバーはプレビューの上に重ねて表示し、タップで表示/非表示を切り替える -->
+     <androidx.appcompat.widget.Toolbar
+diff --git a/gradle/wrapper/gradle-wrapper.jar b/gradle/wrapper/gradle-wrapper.jar
+new file mode 100644
+index 0000000000000000000000000000000000000000..2c3521197d7c4586c843d1d3e9090525f1898cde
+GIT binary patch
+literal 43504
+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
+TZiJi*F`$tkW<p)b$p8Kiq>Ln)
+
+literal 0
+HcmV?d00001
+
+diff --git a/gradle/wrapper/gradle-wrapper.properties b/gradle/wrapper/gradle-wrapper.properties
+new file mode 100644
+index 0000000..09523c0
+--- /dev/null
++++ b/gradle/wrapper/gradle-wrapper.properties
+@@ -0,0 +1,7 @@
++distributionBase=GRADLE_USER_HOME
++distributionPath=wrapper/dists
++distributionUrl=https\://services.gradle.org/distributions/gradle-8.9-bin.zip
++networkTimeout=10000
++validateDistributionUrl=true
++zipStoreBase=GRADLE_USER_HOME
++zipStorePath=wrapper/dists
+diff --git a/gradlew b/gradlew
+new file mode 100755
+index 0000000..f5feea6
+--- /dev/null
++++ b/gradlew
+@@ -0,0 +1,252 @@
++#!/bin/sh
++
++#
++# Copyright © 2015-2021 the original authors.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#      https://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++#
++# SPDX-License-Identifier: Apache-2.0
++#
++
++##############################################################################
++#
++#   Gradle start up script for POSIX generated by Gradle.
++#
++#   Important for running:
++#
++#   (1) You need a POSIX-compliant shell to run this script. If your /bin/sh is
++#       noncompliant, but you have some other compliant shell such as ksh or
++#       bash, then to run this script, type that shell name before the whole
++#       command line, like:
++#
++#           ksh Gradle
++#
++#       Busybox and similar reduced shells will NOT work, because this script
++#       requires all of these POSIX shell features:
++#         * functions;
++#         * expansions «$var», «${var}», «${var:-default}», «${var+SET}»,
++#           «${var#prefix}», «${var%suffix}», and «$( cmd )»;
++#         * compound commands having a testable exit status, especially «case»;
++#         * various built-in commands including «command», «set», and «ulimit».
++#
++#   Important for patching:
++#
++#   (2) This script targets any POSIX shell, so it avoids extensions provided
++#       by Bash, Ksh, etc; in particular arrays are avoided.
++#
++#       The "traditional" practice of packing multiple parameters into a
++#       space-separated string is a well documented source of bugs and security
++#       problems, so this is (mostly) avoided, by progressively accumulating
++#       options in "$@", and eventually passing that to Java.
++#
++#       Where the inherited environment variables (DEFAULT_JVM_OPTS, JAVA_OPTS,
++#       and GRADLE_OPTS) rely on word-splitting, this is performed explicitly;
++#       see the in-line comments for details.
++#
++#       There are tweaks for specific operating systems such as AIX, CygWin,
++#       Darwin, MinGW, and NonStop.
++#
++#   (3) This script is generated from the Groovy template
++#       https://github.com/gradle/gradle/blob/HEAD/platforms/jvm/plugins-application/src/main/resources/org/gradle/api/internal/plugins/unixStartScript.txt
++#       within the Gradle project.
++#
++#       You can find Gradle at https://github.com/gradle/gradle/.
++#
++##############################################################################
++
++# Attempt to set APP_HOME
++
++# Resolve links: $0 may be a link
++app_path=$0
++
++# Need this for daisy-chained symlinks.
++while
++    APP_HOME=${app_path%"${app_path##*/}"}  # leaves a trailing /; empty if no leading path
++    [ -h "$app_path" ]
++do
++    ls=$( ls -ld "$app_path" )
++    link=${ls#*' -> '}
++    case $link in             #(
++      /*)   app_path=$link ;; #(
++      *)    app_path=$APP_HOME$link ;;
++    esac
++done
++
++# This is normally unused
++# shellcheck disable=SC2034
++APP_BASE_NAME=${0##*/}
++# Discard cd standard output in case $CDPATH is set (https://github.com/gradle/gradle/issues/25036)
++APP_HOME=$( cd -P "${APP_HOME:-./}" > /dev/null && printf '%s
++' "$PWD" ) || exit
++
++# Use the maximum available, or set MAX_FD != -1 to use that value.
++MAX_FD=maximum
++
++warn () {
++    echo "$*"
++} >&2
++
++die () {
++    echo
++    echo "$*"
++    echo
++    exit 1
++} >&2
++
++# OS specific support (must be 'true' or 'false').
++cygwin=false
++msys=false
++darwin=false
++nonstop=false
++case "$( uname )" in                #(
++  CYGWIN* )         cygwin=true  ;; #(
++  Darwin* )         darwin=true  ;; #(
++  MSYS* | MINGW* )  msys=true    ;; #(
++  NONSTOP* )        nonstop=true ;;
++esac
++
++CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
++
++
++# Determine the Java command to use to start the JVM.
++if [ -n "$JAVA_HOME" ] ; then
++    if [ -x "$JAVA_HOME/jre/sh/java" ] ; then
++        # IBM's JDK on AIX uses strange locations for the executables
++        JAVACMD=$JAVA_HOME/jre/sh/java
++    else
++        JAVACMD=$JAVA_HOME/bin/java
++    fi
++    if [ ! -x "$JAVACMD" ] ; then
++        die "ERROR: JAVA_HOME is set to an invalid directory: $JAVA_HOME
++
++Please set the JAVA_HOME variable in your environment to match the
++location of your Java installation."
++    fi
++else
++    JAVACMD=java
++    if ! command -v java >/dev/null 2>&1
++    then
++        die "ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH.
++
++Please set the JAVA_HOME variable in your environment to match the
++location of your Java installation."
++    fi
++fi
++
++# Increase the maximum file descriptors if we can.
++if ! "$cygwin" && ! "$darwin" && ! "$nonstop" ; then
++    case $MAX_FD in #(
++      max*)
++        # In POSIX sh, ulimit -H is undefined. That's why the result is checked to see if it worked.
++        # shellcheck disable=SC2039,SC3045
++        MAX_FD=$( ulimit -H -n ) ||
++            warn "Could not query maximum file descriptor limit"
++    esac
++    case $MAX_FD in  #(
++      '' | soft) :;; #(
++      *)
++        # In POSIX sh, ulimit -n is undefined. That's why the result is checked to see if it worked.
++        # shellcheck disable=SC2039,SC3045
++        ulimit -n "$MAX_FD" ||
++            warn "Could not set maximum file descriptor limit to $MAX_FD"
++    esac
++fi
++
++# Collect all arguments for the java command, stacking in reverse order:
++#   * args from the command line
++#   * the main class name
++#   * -classpath
++#   * -D...appname settings
++#   * --module-path (only if needed)
++#   * DEFAULT_JVM_OPTS, JAVA_OPTS, and GRADLE_OPTS environment variables.
++
++# For Cygwin or MSYS, switch paths to Windows format before running java
++if "$cygwin" || "$msys" ; then
++    APP_HOME=$( cygpath --path --mixed "$APP_HOME" )
++    CLASSPATH=$( cygpath --path --mixed "$CLASSPATH" )
++
++    JAVACMD=$( cygpath --unix "$JAVACMD" )
++
++    # Now convert the arguments - kludge to limit ourselves to /bin/sh
++    for arg do
++        if
++            case $arg in                                #(
++              -*)   false ;;                            # don't mess with options #(
++              /?*)  t=${arg#/} t=/${t%%/*}              # looks like a POSIX filepath
++                    [ -e "$t" ] ;;                      #(
++              *)    false ;;
++            esac
++        then
++            arg=$( cygpath --path --ignore --mixed "$arg" )
++        fi
++        # Roll the args list around exactly as many times as the number of
++        # args, so each arg winds up back in the position where it started, but
++        # possibly modified.
++        #
++        # NB: a `for` loop captures its iteration list before it begins, so
++        # changing the positional parameters here affects neither the number of
++        # iterations, nor the values presented in `arg`.
++        shift                   # remove old arg
++        set -- "$@" "$arg"      # push replacement arg
++    done
++fi
++
++
++# Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
++DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
++
++# Collect all arguments for the java command:
++#   * DEFAULT_JVM_OPTS, JAVA_OPTS, JAVA_OPTS, and optsEnvironmentVar are not allowed to contain shell fragments,
++#     and any embedded shellness will be escaped.
++#   * For example: A user cannot expect ${Hostname} to be expanded, as it is an environment variable and will be
++#     treated as '${Hostname}' itself on the command line.
++
++set -- \
++        "-Dorg.gradle.appname=$APP_BASE_NAME" \
++        -classpath "$CLASSPATH" \
++        org.gradle.wrapper.GradleWrapperMain \
++        "$@"
++
++# Stop when "xargs" is not available.
++if ! command -v xargs >/dev/null 2>&1
++then
++    die "xargs is not available"
++fi
++
++# Use "xargs" to parse quoted args.
++#
++# With -n1 it outputs one arg per line, with the quotes and backslashes removed.
++#
++# In Bash we could simply go:
++#
++#   readarray ARGS < <( xargs -n1 <<<"$var" ) &&
++#   set -- "${ARGS[@]}" "$@"
++#
++# but POSIX shell has neither arrays nor command substitution, so instead we
++# post-process each arg (as a line of input to sed) to backslash-escape any
++# character that might be a shell metacharacter, then use eval to reverse
++# that process (while maintaining the separation between arguments), and wrap
++# the whole thing up as a single "set" statement.
++#
++# This will of course break if any of these variables contains a newline or
++# an unmatched quote.
++#
++
++eval "set -- $(
++        printf '%s\n' "$DEFAULT_JVM_OPTS $JAVA_OPTS $GRADLE_OPTS" |
++        xargs -n1 |
++        sed ' s~[^-[:alnum:]+,./:=@_]~\\&~g; ' |
++        tr '\n' ' '
++    )" '"$@"'
++
++exec "$JAVACMD" "$@"
+diff --git a/gradlew.bat b/gradlew.bat
+new file mode 100644
+index 0000000..9b42019
+--- /dev/null
++++ b/gradlew.bat
+@@ -0,0 +1,94 @@
++@rem
++@rem Copyright 2015 the original author or authors.
++@rem
++@rem Licensed under the Apache License, Version 2.0 (the "License");
++@rem you may not use this file except in compliance with the License.
++@rem You may obtain a copy of the License at
++@rem
++@rem      https://www.apache.org/licenses/LICENSE-2.0
++@rem
++@rem Unless required by applicable law or agreed to in writing, software
++@rem distributed under the License is distributed on an "AS IS" BASIS,
++@rem WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++@rem See the License for the specific language governing permissions and
++@rem limitations under the License.
++@rem
++@rem SPDX-License-Identifier: Apache-2.0
++@rem
++
++@if "%DEBUG%"=="" @echo off
++@rem ##########################################################################
++@rem
++@rem  Gradle startup script for Windows
++@rem
++@rem ##########################################################################
++
++@rem Set local scope for the variables with windows NT shell
++if "%OS%"=="Windows_NT" setlocal
++
++set DIRNAME=%~dp0
++if "%DIRNAME%"=="" set DIRNAME=.
++@rem This is normally unused
++set APP_BASE_NAME=%~n0
++set APP_HOME=%DIRNAME%
++
++@rem Resolve any "." and ".." in APP_HOME to make it shorter.
++for %%i in ("%APP_HOME%") do set APP_HOME=%%~fi
++
++@rem Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
++set DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m"
++
++@rem Find java.exe
++if defined JAVA_HOME goto findJavaFromJavaHome
++
++set JAVA_EXE=java.exe
++%JAVA_EXE% -version >NUL 2>&1
++if %ERRORLEVEL% equ 0 goto execute
++
++echo. 1>&2
++echo ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH. 1>&2
++echo. 1>&2
++echo Please set the JAVA_HOME variable in your environment to match the 1>&2
++echo location of your Java installation. 1>&2
++
++goto fail
++
++:findJavaFromJavaHome
++set JAVA_HOME=%JAVA_HOME:"=%
++set JAVA_EXE=%JAVA_HOME%/bin/java.exe
++
++if exist "%JAVA_EXE%" goto execute
++
++echo. 1>&2
++echo ERROR: JAVA_HOME is set to an invalid directory: %JAVA_HOME% 1>&2
++echo. 1>&2
++echo Please set the JAVA_HOME variable in your environment to match the 1>&2
++echo location of your Java installation. 1>&2
++
++goto fail
++
++:execute
++@rem Setup the command line
++
++set CLASSPATH=%APP_HOME%\gradle\wrapper\gradle-wrapper.jar
++
++
++@rem Execute Gradle
++"%JAVA_EXE%" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %GRADLE_OPTS% "-Dorg.gradle.appname=%APP_BASE_NAME%" -classpath "%CLASSPATH%" org.gradle.wrapper.GradleWrapperMain %*
++
++:end
++@rem End local scope for the variables with windows NT shell
++if %ERRORLEVEL% equ 0 goto mainEnd
++
++:fail
++rem Set variable GRADLE_EXIT_CONSOLE if you need the _script_ return code instead of
++rem the _cmd.exe /c_ return code!
++set EXIT_CODE=%ERRORLEVEL%
++if %EXIT_CODE% equ 0 set EXIT_CODE=1
++if not ""=="%GRADLE_EXIT_CONSOLE%" exit %EXIT_CODE%
++exit /b %EXIT_CODE%
++
++:mainEnd
++if "%OS%"=="Windows_NT" endlocal
++
++:omega

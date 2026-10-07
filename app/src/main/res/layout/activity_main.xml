@@ -1,13 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="#000000">
 
+    <!--
+        scaleType は fitCenter を指定する。
+        既定値の fillCenter は「Viewいっぱいに広げてはみ出した分を切り落とす」ため、
+        録画に写る画角より表示される範囲が狭くなり、設置時の画角調整に使えない。
+        fitCenter にすると映像全体(=録画される画角)が表示される。
+    -->
     <androidx.camera.view.PreviewView
         android:id="@+id/previewView"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent"
+        app:scaleType="fitCenter" />
 
     <!-- ツールバーはプレビューの上に重ねて表示し、タップで表示/非表示を切り替える -->
     <androidx.appcompat.widget.Toolbar
