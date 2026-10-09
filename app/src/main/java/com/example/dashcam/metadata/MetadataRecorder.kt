@@ -159,6 +159,40 @@ class MetadataRecorder(private val context: Context) {
         }
     }
 
+    /**
+     * 既にloopフォルダへ保存済みのメタデータJSONを保護フォルダへ移動する。
+     * 動画側が保護フォルダへ移された際に、同じベース名の .json も一緒に移すために使う。
+     */
+    fun moveJsonToProtected(
+        videoDisplayName: String,
+        loopRelativePath: String,
+        protectedRelativePath: String
+    ) {
+        val jsonName = videoDisplayName.substringBeforeLast('.') + ".json"
+        try {
+            val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+            context.contentResolver.query(
+                collection,
+                arrayOf(MediaStore.MediaColumns._ID),
+                "${MediaStore.MediaColumns.DISPLAY_NAME}=? AND ${MediaStore.MediaColumns.RELATIVE_PATH}=?",
+                arrayOf(jsonName, loopRelativePath),
+                null
+            )?.use { cursor ->
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(0)
+                    val uri = android.content.ContentUris.withAppendedId(collection, id)
+                    val values = ContentValues().apply {
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, protectedRelativePath)
+                    }
+                    context.contentResolver.update(uri, values, null, null)
+                    Log.i(TAG, "メタデータJSONを保護フォルダへ移動: $jsonName")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "メタデータJSONの移動に失敗しました: $jsonName", e)
+        }
+    }
+
     private fun scheduleSampling() {
         cancelSampling()
         sampleRunnable = object : Runnable {

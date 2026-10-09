@@ -43,7 +43,10 @@ class VideoOverlayProcessor(
      * エンコードを実行する。
      * @param onCanvasDrawRequest Canvasに描画するコールバック。timeMsは動画内の再生位置(ミリ秒)
      */
-    suspend fun encode(onCanvasDrawRequest: Canvas.(timeMs: Long) -> Unit) = withContext(Dispatchers.Default) {
+    suspend fun encode(
+        onProgressPercent: (Int) -> Unit = {},
+        onCanvasDrawRequest: Canvas.(timeMs: Long) -> Unit
+    ) = withContext(Dispatchers.Default) {
         val mediaExtractor = MediaExtractor().apply {
             setDataSource(context, sourceUri, null)
         }
@@ -52,6 +55,10 @@ class VideoOverlayProcessor(
             .first { (_, f) -> f.getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true }
         mediaExtractor.selectTrack(trackIndex)
         mediaExtractor.seekTo(0, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+
+        // 進捗(%)算出用の動画長。取得できない場合は進捗を出さない
+        val durationUs = runCatching { format.getLong(MediaFormat.KEY_DURATION) }.getOrDefault(0L)
+        var lastPercent = -1
 
         val videoMimeType = format.getString(MediaFormat.KEY_MIME)!!
         val videoWidth = format.getInteger(MediaFormat.KEY_WIDTH)
@@ -173,6 +180,14 @@ class VideoOverlayProcessor(
                             }
                             codecInputSurface.setPresentationTime(bufferInfo.presentationTimeUs * 1000)
                             codecInputSurface.swapBuffers()
+                            if (durationUs > 0) {
+                                val percent = (bufferInfo.presentationTimeUs * 100 / durationUs)
+                                    .toInt().coerceIn(0, 100)
+                                if (percent != lastPercent) {
+                                    lastPercent = percent
+                                    onProgressPercent(percent)
+                                }
+                            }
                         }
                         if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
                             decoderOutputAvailable = false

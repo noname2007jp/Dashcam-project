@@ -14,6 +14,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 /**
@@ -46,6 +48,11 @@ class ExportForegroundService : Service() {
         @Volatile
         var isExporting: Boolean = false
             private set
+
+        private val _progressText = MutableStateFlow("")
+
+        /** 書き出しの進捗表示用テキスト(例: "42% 映像にテキストを焼き込み中")。ExportActivityが購読する */
+        val progressText: StateFlow<String> = _progressText
     }
 
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -104,6 +111,7 @@ class ExportForegroundService : Service() {
         orientation: VideoExportManager.OutputOrientation
     ) {
         isExporting = true
+        _progressText.value = "0% 準備中"
         exportJob = serviceScope.launch {
             val manager = VideoExportManager(this@ExportForegroundService)
             val result = manager.export(
@@ -112,17 +120,23 @@ class ExportForegroundService : Service() {
                 metadataJsonUri = metadataUri,
                 options = options,
                 outputOrientation = orientation,
-                onProgress = { message -> updateNotification(message) }
+                onProgress = { message, percent ->
+                    val text = "$percent% $message"
+                    _progressText.value = text
+                    updateNotification(text, percent = percent)
+                }
             )
 
             isExporting = false
 
             when (result) {
                 is VideoExportManager.Result.Success -> {
+                    _progressText.value = "100% 書き出し完了: ${result.displayName}"
                     updateNotification("書き出し完了: ${result.displayName}", ongoing = false)
                     Log.i(TAG, "書き出し完了: ${result.displayName}")
                 }
                 is VideoExportManager.Result.Failure -> {
+                    _progressText.value = "書き出しに失敗しました: ${result.error.message}"
                     updateNotification(
                         "書き出しに失敗しました: ${result.error.message}", ongoing = false
                     )
@@ -149,18 +163,26 @@ class ExportForegroundService : Service() {
         }
     }
 
-    private fun updateNotification(text: String, ongoing: Boolean = true) {
+    private fun updateNotification(text: String, ongoing: Boolean = true, percent: Int? = null) {
         val manager = getSystemService(NotificationManager::class.java)
-        manager.notify(NOTIFICATION_ID, buildNotification(text, ongoing))
+        manager.notify(NOTIFICATION_ID, buildNotification(text, ongoing, percent))
     }
 
-    private fun buildNotification(text: String, ongoing: Boolean): Notification {
+    private fun buildNotification(
+        text: String,
+        ongoing: Boolean,
+        percent: Int? = null
+    ): Notification {
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle("動画の書き出し")
             .setContentText(text)
             .setSmallIcon(com.example.dashcam.R.drawable.ic_recording)
             .setOngoing(ongoing)
+            .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            .apply {
+                if (percent != null) setProgress(100, percent, false)
+            }
             .build()
     }
 

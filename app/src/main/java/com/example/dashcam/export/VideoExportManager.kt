@@ -54,7 +54,8 @@ class VideoExportManager(private val context: Context) {
      * @param options 焼き込みオプション(日時/位置/速度、表示位置)
      * @param outputOrientation 出力の向き(横/縦)。自動検出した回転情報は使わず、
      *   常にこちらの指定を優先する
-     * @param onProgress 進捗コールバック(0.0〜1.0の概算。厳密な進捗ではない)
+     * @param onProgress 進捗コールバック(メッセージ, 全体の進捗%)。
+     *   映像の焼き込みが0〜90%、音声合成が〜95%、保存が〜100%に対応する
      */
     suspend fun export(
         sourceVideoUri: Uri,
@@ -62,14 +63,14 @@ class VideoExportManager(private val context: Context) {
         metadataJsonUri: Uri?,
         options: ExportOptions,
         outputOrientation: OutputOrientation = OutputOrientation.LANDSCAPE,
-        onProgress: (String) -> Unit = {}
+        onProgress: (message: String, percent: Int) -> Unit = { _, _ -> }
     ): Result = withContext(Dispatchers.Default) {
         val tempDir = File(context.cacheDir, "export_tmp").apply { mkdirs() }
         val videoOnlyFile = File(tempDir, "video_only_${System.currentTimeMillis()}.mp4")
         val muxedFile = File(tempDir, "muxed_${System.currentTimeMillis()}.mp4")
 
         try {
-            onProgress("元動画の情報を確認中")
+            onProgress("元動画の情報を確認中", 0)
             val sourceInfo = readSourceVideoInfo(sourceVideoUri, outputOrientation)
             Log.i(
                 TAG,
@@ -77,13 +78,13 @@ class VideoExportManager(private val context: Context) {
                     "${sourceInfo.bitRate / 1_000_000}Mbps, ${sourceInfo.frameRate}fps"
             )
 
-            onProgress("メタデータを読み込み中")
+            onProgress("メタデータを読み込み中", 0)
             val samples = metadataJsonUri?.let { loadSamples(it) } ?: emptyList()
             val videoStartEpochMs = samples.firstOrNull()?.timestampMs
                 ?: System.currentTimeMillis()
             val overlayRenderer = OverlayTextRenderer(samples, videoStartEpochMs, options)
 
-            onProgress("映像にテキストを焼き込み中")
+            onProgress("映像にテキストを焼き込み中", 0)
             val processor = VideoOverlayProcessor(
                 context = context,
                 sourceUri = sourceVideoUri,
@@ -93,11 +94,15 @@ class VideoExportManager(private val context: Context) {
                 bitRate = sourceInfo.bitRate,
                 frameRate = sourceInfo.frameRate
             )
-            processor.encode { timeMs ->
+            processor.encode(
+                onProgressPercent = { p ->
+                    onProgress("映像にテキストを焼き込み中", p * 90 / 100)
+                }
+            ) { timeMs ->
                 overlayRenderer.draw(this, timeMs)
             }
 
-            onProgress("音声を合成中")
+            onProgress("音声を合成中", 90)
             AudioMuxer(
                 context = context,
                 videoOnlyFile = videoOnlyFile,
@@ -105,11 +110,12 @@ class VideoExportManager(private val context: Context) {
                 resultFile = muxedFile
             ).mux()
 
-            onProgress("保存先へコピー中")
+            onProgress("保存先へコピー中", 95)
             val outputDisplayName = sourceDisplayName.substringBeforeLast('.') + "_export.mp4"
             val outputUri = saveToMediaStore(muxedFile, outputDisplayName)
                 ?: throw IllegalStateException("MediaStoreへの保存に失敗しました")
 
+            onProgress("完了", 100)
             Result.Success(outputUri, outputDisplayName)
         } catch (e: Exception) {
             Log.e(TAG, "書き出しに失敗しました", e)

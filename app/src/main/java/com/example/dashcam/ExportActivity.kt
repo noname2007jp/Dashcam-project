@@ -68,6 +68,17 @@ class ExportActivity : AppCompatActivity() {
         textSelectedVideo = findViewById(R.id.textSelectedVideo)
         buttonExport = findViewById(R.id.buttonExport)
         textProgress = findViewById(R.id.textProgress)
+
+        // 書き出しの進捗(%)を画面にも表示する(通知と同じ内容)
+        lifecycleScope.launch {
+            ExportForegroundService.progressText.collect { text ->
+                if (text.isNotEmpty() && ExportForegroundService.isExporting ||
+                    text.startsWith("100%") || text.startsWith("書き出しに失敗")
+                ) {
+                    textProgress.text = text
+                }
+            }
+        }
         checkDate = findViewById(R.id.checkDate)
         checkLocation = findViewById(R.id.checkLocation)
         checkSpeed = findViewById(R.id.checkSpeed)
@@ -171,9 +182,9 @@ class ExportActivity : AppCompatActivity() {
             }
 
             textProgress.text = if (metadataUri == null) {
-                "書き出しを開始しました(対応するメタデータが見つからないため、日時・位置なしで焼き込みます)。\n進捗は通知で確認できます。この画面を閉じても処理は継続します。"
+                "書き出しを開始しました(対応するメタデータが見つからないため、日時・位置なしで焼き込みます)。\n進捗は通知でも確認できます。この画面を閉じても処理は継続します。"
             } else {
-                "書き出しを開始しました。進捗は通知で確認できます。この画面を閉じても処理は継続します。"
+                "書き出しを開始しました。進捗は通知でも確認できます。この画面を閉じても処理は継続します。"
             }
             Toast.makeText(this@ExportActivity, "書き出しを開始しました", Toast.LENGTH_SHORT).show()
         }

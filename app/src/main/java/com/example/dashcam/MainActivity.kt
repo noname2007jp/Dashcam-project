@@ -67,7 +67,7 @@ class MainActivity : AppCompatActivity() {
             boundService = binder.getService()
             attachPreview()
             updatePauseButtonText()
-            updateUiForRunningState(true)
+            updateUiForRunningState(DashcamForegroundService.isRecordingActive)
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
@@ -94,6 +94,8 @@ class MainActivity : AppCompatActivity() {
     ) { results ->
         val allGranted = results.values.all { it }
         if (allGranted) {
+            // 権限が揃ったら、まずプレビュー待機状態でサービスを起動する
+            ensureServicePreparedAndBound()
             if (startRequestedAfterPermission) {
                 beginRecording()
             }
@@ -153,19 +155,21 @@ class MainActivity : AppCompatActivity() {
             confirmAndStopDashcam()
         }
 
-        // 自動開始はしない。既に起動中(バックグラウンドから復帰等)なら
-        // onStart() でバインドして状態を復元する。
-        updateUiForRunningState(DashcamForegroundService.isRunning)
+        // 起動時はプレビューのみ表示(画角調整用)。録画は「開始」ボタンで始まる。
+        // 権限が無い場合は起動直後に許可を求める。
+        updateUiForRunningState(DashcamForegroundService.isRecordingActive)
+        if (!hasAllPermissions()) {
+            permissionLauncher.launch(requiredPermissions)
+        }
     }
 
     override fun onStart() {
         super.onStart()
-        // 既にサービスが起動中(以前「開始」した状態が続いている)なら、
-        // 新規開始はせずバインドのみ行って状態を復元する
-        if (hasAllPermissions() && DashcamForegroundService.isRunning && !isBound) {
-            bindToDashcamService()
+        // サービスが未起動ならプレビュー待機モードで起動し、起動中ならバインドして状態を復元する
+        if (hasAllPermissions()) {
+            ensureServicePreparedAndBound()
         }
-        updateUiForRunningState(DashcamForegroundService.isRunning)
+        updateUiForRunningState(DashcamForegroundService.isRecordingActive)
         schedulePseudoOff()
     }
 
@@ -247,16 +251,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 「開始」ボタンから呼ばれる。パーミッションが揃っている前提でサービスを開始する。 */
-    private fun beginRecording() {
-        startDashcamService()
+    /** サービスがまだ無ければプレビュー待機モードで起動し、バインドしてプレビューを表示する */
+    private fun ensureServicePreparedAndBound() {
+        if (!DashcamForegroundService.isRunning) {
+            startDashcamService(DashcamForegroundService.ACTION_START)
+        }
         if (!isBound) bindToDashcamService()
-        updateUiForRunningState(true)
     }
 
-    private fun startDashcamService() {
+    /** 「開始」ボタンから呼ばれる。パーミッションが揃っている前提で録画セッションを開始する。 */
+    private fun beginRecording() {
+        startDashcamService(DashcamForegroundService.ACTION_BEGIN_RECORDING)
+        if (!isBound) bindToDashcamService()
+        updateUiForRunningState(true)
+        updatePauseButtonText()
+    }
+
+    private fun startDashcamService(action: String) {
         val intent = Intent(this, DashcamForegroundService::class.java).apply {
-            action = DashcamForegroundService.ACTION_START
+            this.action = action
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent)
@@ -272,11 +285,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun attachPreview() {
-        // Activity(=この画面)の実際のDisplayの向きに合わせてプレビューの回転を設定する。
-        // 画面回転でActivityが再生成されるたびにこの関数が呼ばれるため、常に
-        // そのときの実際の画面の向きに同期する。
-        val displayRotation = previewView.display?.rotation ?: android.view.Surface.ROTATION_0
-        boundService?.setPreviewTargetRotation(displayRotation)
+        // 画面は横向き固定(AndroidManifest)のため、PreviewViewが自動で正しく補正する
         boundService?.attachPreviewSurfaceProvider(previewView.surfaceProvider)
     }
 
@@ -325,9 +334,22 @@ class MainActivity : AppCompatActivity() {
                     boundService = null
                 }
                 updateUiForRunningState(false)
+                // 終了後もプレビューは見られるよう、サービス破棄を待って待機モードで再起動する
+                reprepareAfterStop(0)
             }
             .setNegativeButton("キャンセル", null)
             .show()
+    }
+
+    private fun reprepareAfterStop(attempt: Int) {
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (isFinishing || isDestroyed) return@postDelayed
+            if (!DashcamForegroundService.isRunning) {
+                if (hasAllPermissions()) ensureServicePreparedAndBound()
+            } else if (attempt < 10) {
+                reprepareAfterStop(attempt + 1)
+            }
+        }, 500)
     }
 
     /** フォアグラウンドサービスに停止を指示する(サービス自身がstopForeground/stopSelfを行う) */

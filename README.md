@@ -232,19 +232,10 @@ Gradle Wrapperを同梱していないため、初回はAndroid Studioが自動�
 
 ## UI・操作性の改善(2026-10)
 
-1. **画面回転への追従**: `DashcamRecorder`がサービス側でカメラをバインドしているため、
-   起動時の向きに固定される不具合があった。修正は以下の2段構え:
-   - **録画(VideoCapture)**: `OrientationEventListener`(センサーベース)で端末の向きを
-     監視し、`targetRotation`を更新。Activityが非表示でもバックグラウンドで継続録画する
-     ため、画面の状態に依存しない検知が必要
-   - **プレビュー(Preview)**: `PreviewView`はActivity自身の画面の向き(`Display.rotation`)
-     に基づいて内部で自動補正する仕組みを持っているため、録画と同じセンサーの生角度で
-     上書きすると二重に回転がかかり、プレビューが縦長に歪む不具合が発生していた。
-     `setPreviewTargetRotation()`を新設し、`MainActivity`からそのときの
-     `previewView.display.rotation`を渡して設定するよう分離した
-   - `MainActivity`に`android:screenOrientation="fullSensor"`を指定し、端末の
-     「自動回転」設定に関わらず常にセンサーの向きに追従するよう変更(回転提案アイコンを
-     タップする必要がなくなる)
+1. **画面の向き**: 動的な回転追従(センサー監視・`setPreviewTargetRotation`)はプレビューが
+   縦長/横長に歪む原因だったため全て削除。`MainActivity`を
+   `android:screenOrientation="sensorLandscape"`(横向き固定、左右反転のみ許可)にし、
+   `PreviewView`の標準の補正に任せる。録画は横向き(既定のVideoCapture回転)で保存される
 2. **書き出し時の向き選択**: 上記の回転追従が完全に信頼できるとは限らないため、
    `ExportActivity`に「横(推奨)/縦」の手動選択を追加。自動検出した回転情報には
    頼らず、常にこの指定を優先して出力解像度を決定する(デフォルトは横)
@@ -280,6 +271,18 @@ Gradle Wrapperを同梱していないため、初回はAndroid Studioが自動�
   ガード。実行中に新規リクエストが来た場合は無視される)
 - `foregroundServiceType="dataSync"`を使用(Android 10以降。Android 14以降は
   24時間あたり合計6時間までの制限があるが、書き出し処理の用途では十分)
+
+## 2026-10 修正・機能変更
+
+- **起動時プレビュー**: アプリ起動直後(権限許可後)にサービスを「プレビュー待機モード」で起動し、
+  録画せずにプレビューだけを表示(画角調整用)。「開始」で `ACTION_BEGIN_RECORDING` を送り、
+  ループ録画・メタデータ・衝撃/急ブレーキ/走行状態検知を開始する。「終了」後は再び待機モードに戻る
+- **メタデータJSONの保護フォルダ移動**: 直前のセグメントが保護フォルダへ移されたとき、
+  `onPreviousSegmentProtected` → `MetadataRecorder.moveJsonToProtected()` で同名の `.json` も
+  loop → protected へ移動する(録画中だったセグメントは保存時に最初から protected へ保存)
+- **書き出しの進捗(%)**: `VideoOverlayProcessor` が再生位置/動画長から%を算出。
+  映像焼き込み 0〜90%、音声合成 90%、保存 95%、完了 100%。通知のプログレスバーと
+  `ExportActivity` の表示(`ExportForegroundService.progressText`)に反映
 
 ## 未実装(今後追加予定)
 

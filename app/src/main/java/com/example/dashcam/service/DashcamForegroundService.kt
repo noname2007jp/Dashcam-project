@@ -47,6 +47,8 @@ class DashcamForegroundService : LifecycleService() {
         const val ACTION_STOP = "com.example.dashcam.action.STOP"
         const val ACTION_PAUSE = "com.example.dashcam.action.PAUSE"
         const val ACTION_RESUME = "com.example.dashcam.action.RESUME"
+        /** プレビュー待機中のサービスに対し、録画セッション(録画・各検知)の開始を指示する */
+        const val ACTION_BEGIN_RECORDING = "com.example.dashcam.action.BEGIN_RECORDING"
 
         /**
          * サービスが現在起動中かどうか(同一プロセス内でのみ参照可能な簡易フラグ)。
@@ -54,6 +56,11 @@ class DashcamForegroundService : LifecycleService() {
          */
         @Volatile
         var isRunning: Boolean = false
+            private set
+
+        /** 録画セッションが開始されているか(プレビュー待機中は false) */
+        @Volatile
+        var isRecordingActive: Boolean = false
             private set
     }
 
@@ -101,15 +108,6 @@ class DashcamForegroundService : LifecycleService() {
         recorder?.setPreviewSurfaceProvider(null)
     }
 
-    /**
-     * プレビューのtargetRotationを、Activity側の実際のDisplay.rotationに
-     * 合わせて設定する。Activity起動時・画面回転によるActivity再生成時に
-     * 呼び出す想定。
-     */
-    fun setPreviewTargetRotation(rotation: Int) {
-        recorder?.setPreviewTargetRotation(rotation)
-    }
-
     override fun onCreate() {
         super.onCreate()
         isRunning = true
@@ -133,16 +131,17 @@ class DashcamForegroundService : LifecycleService() {
                 resumeRecording()
                 return START_STICKY
             }
+            ACTION_BEGIN_RECORDING -> {
+                if (recorder == null) {
+                    startForegroundWithNotification()
+                    prepareCameraOnly()
+                }
+                beginRecordingSession()
+            }
             else -> {
+                // 起動直後はプレビューのみ(画角調整用)。録画は「開始」ボタンで始まる
                 startForegroundWithNotification()
-                acquireWakeLock()
-                // MetadataRecorderはrecorderの最初のセグメント開始(onSegmentStarted)より
-                // 前に起動しておく必要があるため先に呼び出す
-                startMetadataRecorder()
-                startRecorder()
-                startShockDetector()
-                startTailgatingDetector()
-                startDrivingStateDetector()
+                prepareCameraOnly()
             }
         }
 
@@ -177,8 +176,25 @@ class DashcamForegroundService : LifecycleService() {
         Log.i(TAG, "録画を再開しました")
     }
 
+    /**
+     * 録画セッションを開始する(ループ録画・メタデータ・各種検知)。
+     * MetadataRecorderは最初のセグメント開始(onSegmentStarted)より前に起動する必要がある。
+     */
+    private fun beginRecordingSession() {
+        if (isRecordingActive) return
+        isRecordingActive = true
+        isPausedByUser = false
+        acquireWakeLock()
+        startMetadataRecorder()
+        startShockDetector()
+        startTailgatingDetector()
+        startDrivingStateDetector()
+        recorder?.startLoopRecording()
+        updateNotification("録画中")
+    }
+
     private fun startForegroundWithNotification() {
-        val notification = buildNotification("録画中")
+        val notification = buildNotification("プレビュー待機中(「開始」で録画を始めます)")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID,
@@ -375,7 +391,7 @@ class DashcamForegroundService : LifecycleService() {
         shockDetector = null
     }
 
-    private fun startRecorder() {
+    private fun prepareCameraOnly() {
         if (recorder != null) {
             Log.w(TAG, "既にRecorderが起動しています")
             return
@@ -474,6 +490,14 @@ class DashcamForegroundService : LifecycleService() {
                     }
                 }
 
+                override fun onPreviousSegmentProtected(displayName: String) {
+                    metadataRecorder?.moveJsonToProtected(
+                        displayName,
+                        DashcamRecorder.LOOP_RELATIVE_PATH,
+                        DashcamRecorder.PROTECTED_RELATIVE_PATH
+                    )
+                }
+
                 override fun onRecordingError(error: Throwable) {
                     Log.e(TAG, "録画エラー", error)
                     updateNotification("録画エラーが発生しました")
@@ -490,13 +514,11 @@ class DashcamForegroundService : LifecycleService() {
         )
 
         recorder?.initialize()
-        // 初期状態は走行中とみなして常時録画を開始する。
-        // DrivingStateDetectorの判定が確定し次第、駐車中であれば自動的に停止される。
-        recorder?.startLoopRecording()
-        updateNotification("録画中")
+        updateNotification("プレビュー待機中(「開始」で録画を始めます)")
     }
 
     private fun stopRecordingAndSelf() {
+        isRecordingActive = false
         recorder?.release()
         recorder = null
         motionDetector = null
@@ -525,6 +547,7 @@ class DashcamForegroundService : LifecycleService() {
         voiceAlertManager?.release()
         voiceAlertManager = null
         isRunning = false
+        isRecordingActive = false
         super.onDestroy()
     }
 
