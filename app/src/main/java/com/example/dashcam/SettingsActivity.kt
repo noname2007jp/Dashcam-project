@@ -160,6 +160,16 @@ class SettingsActivity : AppCompatActivity() {
         setupThresholdSliders()
         setupScreenTimeoutSpinner()
 
+        findViewById<android.widget.CheckBox>(R.id.checkParkingMotion).apply {
+            isChecked = settingsManager.parkingMotionRecordingEnabled
+            setOnCheckedChangeListener { _, checked ->
+                settingsManager.parkingMotionRecordingEnabled = checked
+                Toast.makeText(
+                    this@SettingsActivity, "次回の駐車判定から反映されます", Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+
         findViewById<android.widget.CheckBox>(R.id.checkConfirmOnStop).apply {
             isChecked = settingsManager.confirmOnStop
             setOnCheckedChangeListener { _, checked -> settingsManager.confirmOnStop = checked }

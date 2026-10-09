@@ -303,8 +303,13 @@ class DashcamRecorder(
         currentRecording = vc.output
             .prepareRecording(context, outputOptions)
             .apply {
-                // 音声録音が必要な場合は withAudioEnabled() を追加
-                // (RECORD_AUDIO パーミッションが別途必要)
+                // 音声(マイク)も録音する。RECORD_AUDIO が許可されていない場合は映像のみ
+                if (androidx.core.content.ContextCompat.checkSelfPermission(
+                        context, android.Manifest.permission.RECORD_AUDIO
+                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) {
+                    withAudioEnabled()
+                }
             }
             .start(cameraExecutor) { event ->
                 handleRecordEvent(event)

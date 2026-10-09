@@ -171,6 +171,34 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:text="駐車中の動体検知録画"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="8dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="駐車中は通常録画を停止し、動きを検知したときだけ録画を開始、動きが止まって15秒経過したら停止します。オフにすると駐車中も常時録画を続けます。"
+        android:textSize="13sp"
+        android:layout_marginBottom="8dp" />
+
+    <CheckBox
+        android:id="@+id/checkParkingMotion"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="駐車中の動体検知録画を有効にする" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="24dp"
+        android:layout_marginBottom="16dp"
+        android:background="#CCCCCC" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
         android:text="終了時の確認"
         android:textSize="18sp"
         android:textStyle="bold"

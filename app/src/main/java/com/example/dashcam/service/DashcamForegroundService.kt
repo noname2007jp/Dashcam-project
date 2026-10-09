@@ -189,8 +189,13 @@ class DashcamForegroundService : LifecycleService() {
         isPausedByUser = false
         when (drivingStateDetector?.getCurrentState()) {
             DrivingStateDetector.State.PARKING -> {
-                // 駐車監視中は動体検知/衝撃検知が録画開始を判断するので、ここでは待機のみ
-                updateNotification("駐車監視中(待機)")
+                if (settingsManager.parkingMotionRecordingEnabled) {
+                    // 駐車監視中は動体検知/衝撃検知が録画開始を判断するので、ここでは待機のみ
+                    updateNotification("駐車監視中(待機)")
+                } else {
+                    recorder?.startLoopRecording()
+                    updateNotification("駐車中(常時録画中)")
+                }
             }
             else -> {
                 recorder?.startLoopRecording()
@@ -220,12 +225,15 @@ class DashcamForegroundService : LifecycleService() {
     private fun startForegroundWithNotification() {
         val notification = buildNotification("プレビュー待機中(「開始」で録画を始めます)")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or
-                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-            )
+            // マイクはバックグラウンドで録音を続けるために必要(権限がある場合のみ指定)
+            var type = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+            if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            }
+            startForeground(NOTIFICATION_ID, notification, type)
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
@@ -325,14 +333,21 @@ class DashcamForegroundService : LifecycleService() {
                             }
                         }
                         DrivingStateDetector.State.PARKING -> {
-                            isParkingMode = true
+                            val motionMode = settingsManager.parkingMotionRecordingEnabled
+                            isParkingMode = motionMode
                             shockDetector?.setMode(ShockDetector.Mode.PARKING)
                             tailgatingDetector?.setActive(false)
                             motionDetector?.reset()
-                            // 常時ループ録画は停止。以降はMotionDetectorが
-                            // 動きを検知したときだけ録画を開始する
-                            recorder?.stopRecording()
-                            updateNotification("駐車監視中(待機)")
+                            if (motionMode) {
+                                // 常時ループ録画は停止。以降はMotionDetectorが
+                                // 動きを検知したときだけ録画を開始する
+                                recorder?.stopRecording()
+                                updateNotification("駐車監視中(待機)")
+                            } else if (!isPausedByUser) {
+                                // 動体検知録画が無効: 駐車中も常時録画を続ける
+                                recorder?.startLoopRecording()
+                                updateNotification("駐車中(常時録画中)")
+                            }
                         }
                         DrivingStateDetector.State.UNKNOWN -> {
                             // 初期状態、判定中は何もしない
