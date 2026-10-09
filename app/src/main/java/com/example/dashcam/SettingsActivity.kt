@@ -159,6 +159,11 @@ class SettingsActivity : AppCompatActivity() {
         setupCapacitySpinner()
         setupThresholdSliders()
         setupScreenTimeoutSpinner()
+
+        findViewById<android.widget.CheckBox>(R.id.checkConfirmOnStop).apply {
+            isChecked = settingsManager.confirmOnStop
+            setOnCheckedChangeListener { _, checked -> settingsManager.confirmOnStop = checked }
+        }
     }
 
     private fun setupScreenTimeoutSpinner() {

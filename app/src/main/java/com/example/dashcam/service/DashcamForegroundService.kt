@@ -59,6 +59,11 @@ class DashcamForegroundService : LifecycleService() {
             private set
 
         /** 録画セッションが開始されているか(プレビュー待機中は false) */
+        /** 停止処理に入った(サービス破棄待ち)かどうか。この間は再起動を待つ必要がある */
+        @Volatile
+        var isStopping: Boolean = false
+            private set
+
         @Volatile
         var isRecordingActive: Boolean = false
             private set
@@ -100,17 +105,36 @@ class DashcamForegroundService : LifecycleService() {
 
     /** 設置時の画角調整用。Activityが表示されている間だけ呼び出される想定。 */
     fun attachPreviewSurfaceProvider(surfaceProvider: Preview.SurfaceProvider) {
+        pendingSurfaceProvider = surfaceProvider
         recorder?.setPreviewSurfaceProvider(surfaceProvider)
+    }
+
+    private var pendingSurfaceProvider: Preview.SurfaceProvider? = null
+
+    /**
+     * 録画セッション中でなければ(=プレビュー待機中なら)サービスを停止してカメラを閉じる。
+     * Activityが画面から消えるときに呼ばれる。録画中は何もしない(バックグラウンド録画を継続)。
+     */
+    fun shutdownIfIdle() {
+        if (!isRecordingActive) stopRecordingAndSelf()
+    }
+
+    /** アプリがタスク一覧から消された場合、録画中でなければカメラを閉じて終了する */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        if (!isRecordingActive) stopRecordingAndSelf()
     }
 
     /** Activityが非表示になったときに呼び出し、プレビュー描画を止める。 */
     fun detachPreviewSurfaceProvider() {
+        pendingSurfaceProvider = null
         recorder?.setPreviewSurfaceProvider(null)
     }
 
     override fun onCreate() {
         super.onCreate()
         isRunning = true
+        isStopping = false
         createNotificationChannel()
         voiceAlertManager = VoiceAlertManager(this)
     }
@@ -513,11 +537,13 @@ class DashcamForegroundService : LifecycleService() {
             }
         )
 
+        pendingSurfaceProvider?.let { recorder?.setPreviewSurfaceProvider(it) }
         recorder?.initialize()
         updateNotification("プレビュー待機中(「開始」で録画を始めます)")
     }
 
     private fun stopRecordingAndSelf() {
+        isStopping = true
         isRecordingActive = false
         recorder?.release()
         recorder = null
@@ -548,6 +574,7 @@ class DashcamForegroundService : LifecycleService() {
         voiceAlertManager = null
         isRunning = false
         isRecordingActive = false
+        isStopping = false
         super.onDestroy()
     }
 

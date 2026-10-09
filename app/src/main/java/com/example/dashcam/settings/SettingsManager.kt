@@ -22,6 +22,7 @@ class SettingsManager(context: Context) {
         private const val KEY_SHOCK_DRIVING_THRESHOLD = "shock_driving_threshold_g"
         private const val KEY_SHOCK_PARKING_THRESHOLD = "shock_parking_threshold_g"
         private const val KEY_TAILGATING_THRESHOLD = "tailgating_threshold_g"
+        private const val KEY_CONFIRM_ON_STOP = "confirm_on_stop"
         private const val KEY_SCREEN_TIMEOUT_SECONDS = "screen_timeout_seconds"
 
         // ShockDetector/TailgatingDetector側の初期値と合わせている
@@ -90,6 +91,13 @@ class SettingsManager(context: Context) {
         get() = prefs.getFloat(KEY_TAILGATING_THRESHOLD, DEFAULT_TAILGATING_THRESHOLD_G)
         set(value) {
             prefs.edit().putFloat(KEY_TAILGATING_THRESHOLD, value).apply()
+        }
+
+    /** 「終了」ボタン押下時に確認ダイアログを出すか(既定: 出す)。 */
+    var confirmOnStop: Boolean
+        get() = prefs.getBoolean(KEY_CONFIRM_ON_STOP, true)
+        set(value) {
+            prefs.edit().putBoolean(KEY_CONFIRM_ON_STOP, value).apply()
         }
 
     /**

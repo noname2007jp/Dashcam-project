@@ -99,6 +99,15 @@ class DashcamRecorder(
     private var videoCapture: VideoCapture<Recorder>? = null
     private var preview: Preview? = null
 
+    // bindCamera()が非同期のため、先に渡されたプレビュー描画先を保持して、
+    // バインド完了時に必ず適用する(起動直後に黒画面になる問題の対策)
+    @Volatile
+    private var pendingSurfaceProvider: Preview.SurfaceProvider? = null
+    private var cameraProvider: ProcessCameraProvider? = null
+
+    @Volatile
+    private var released = false
+
     private var currentRecording: Recording? = null
     private var currentSegmentUri: Uri? = null
     private var currentSegmentDisplayName: String? = null
@@ -126,8 +135,10 @@ class DashcamRecorder(
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
             try {
-                val cameraProvider = cameraProviderFuture.get()
-                bindCamera(cameraProvider)
+                val provider = cameraProviderFuture.get()
+                if (released) return@addListener
+                cameraProvider = provider
+                bindCamera(provider)
             } catch (e: Exception) {
                 Log.e(TAG, "カメラ初期化失敗", e)
                 listener.onCameraInitFailed(e)
@@ -146,7 +157,9 @@ class DashcamRecorder(
             .build()
 
         videoCapture = VideoCapture.withOutput(recorder)
-        preview = Preview.Builder().build()
+        preview = Preview.Builder().build().also {
+            pendingSurfaceProvider?.let { sp -> it.setSurfaceProvider(sp) }
+        }
 
         val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA // アウトカメラのみ
 
@@ -190,6 +203,7 @@ class DashcamRecorder(
      * nullを渡すと描画を停止する(Activityが非表示になったときなど)。
      */
     fun setPreviewSurfaceProvider(surfaceProvider: Preview.SurfaceProvider?) {
+        pendingSurfaceProvider = surfaceProvider
         preview?.setSurfaceProvider(surfaceProvider)
     }
 
@@ -380,6 +394,16 @@ class DashcamRecorder(
 
     /** リソース解放。Activity/Service の onDestroy 等から呼び出す。 */
     fun release() {
+        released = true
         stopRecording()
+        // カメラを確実に閉じる(サービス破棄を待たず、ここで全ユースケースを解除する)
+        preview?.setSurfaceProvider(null)
+        pendingSurfaceProvider = null
+        try {
+            cameraProvider?.unbindAll()
+        } catch (e: Exception) {
+            Log.e(TAG, "カメラの解除に失敗しました", e)
+        }
+        cameraProvider = null
     }
 }

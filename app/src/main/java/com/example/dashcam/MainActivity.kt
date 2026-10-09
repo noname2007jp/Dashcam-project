@@ -178,6 +178,8 @@ class MainActivity : AppCompatActivity() {
         // Activityが表示されなくなったらプレビュー描画は止める(録画自体は継続)
         boundService?.detachPreviewSurfaceProvider()
         if (isBound) {
+            // 録画中でなければ(プレビュー待機のみ)、画面を離れるときにカメラを閉じる
+            if (!isChangingConfigurations) boundService?.shutdownIfIdle()
             unbindService(serviceConnection)
             isBound = false
             boundService = null
@@ -253,6 +255,11 @@ class MainActivity : AppCompatActivity() {
 
     /** サービスがまだ無ければプレビュー待機モードで起動し、バインドしてプレビューを表示する */
     private fun ensureServicePreparedAndBound() {
+        // 前回のサービスが停止処理中なら、破棄されるのを待ってから起動し直す
+        if (DashcamForegroundService.isStopping) {
+            reprepareAfterStop(0)
+            return
+        }
         if (!DashcamForegroundService.isRunning) {
             startDashcamService(DashcamForegroundService.ACTION_START)
         }
@@ -321,29 +328,37 @@ class MainActivity : AppCompatActivity() {
 
     /** 誤操作防止のため確認ダイアログを出してから録画を終了する */
     private fun confirmAndStopDashcam() {
+        if (!settingsManager.confirmOnStop) {
+            performStop()
+            return
+        }
         AlertDialog.Builder(this)
             .setTitle("ドラレコを終了しますか?")
             .setMessage("終了すると、以降は録画・各種検知が行われなくなります。「開始」ボタンでいつでも再開できます。")
-            .setPositiveButton("終了する") { _, _ ->
-                stopDashcamService()
-                // バインドしたままだとサービスが完全に破棄されない(stopSelf()が
-                // 保留されるだけになる)ため、ここで明示的にバインド解除する
-                if (isBound) {
-                    unbindService(serviceConnection)
-                    isBound = false
-                    boundService = null
-                }
-                updateUiForRunningState(false)
-                // 終了後もプレビューは見られるよう、サービス破棄を待って待機モードで再起動する
-                reprepareAfterStop(0)
-            }
+            .setPositiveButton("終了する") { _, _ -> performStop() }
             .setNegativeButton("キャンセル", null)
             .show()
     }
 
+    private fun performStop() {
+        stopDashcamService()
+        // バインドしたままだとサービスが完全に破棄されない(stopSelf()が
+        // 保留されるだけになる)ため、ここで明示的にバインド解除する
+        if (isBound) {
+            unbindService(serviceConnection)
+            isBound = false
+            boundService = null
+        }
+        updateUiForRunningState(false)
+        // 終了後もプレビューは見られるよう、サービス破棄を待って待機モードで再起動する
+        reprepareAfterStop(0)
+    }
+
     private fun reprepareAfterStop(attempt: Int) {
         Handler(Looper.getMainLooper()).postDelayed({
-            if (isFinishing || isDestroyed) return@postDelayed
+            if (isFinishing || isDestroyed ||
+                !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
+            ) return@postDelayed
             if (!DashcamForegroundService.isRunning) {
                 if (hasAllPermissions()) ensureServicePreparedAndBound()
             } else if (attempt < 10) {
