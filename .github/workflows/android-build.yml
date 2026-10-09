@@ -31,6 +31,8 @@ jobs:
             https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip
           unzip -q cmdline-tools.zip
           rm cmdline-tools.zip
+          # ダウンロードした中身は cmdline-tools/cmdline-tools/... という構造なので
+          # sdkmanagerが期待する cmdline-tools/latest/... に配置し直す
           mv cmdline-tools latest
 
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
