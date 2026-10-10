@@ -233,7 +233,22 @@ class DashcamForegroundService : LifecycleService() {
             ) {
                 type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
             }
-            startForeground(NOTIFICATION_ID, notification, type)
+            try {
+                startForeground(NOTIFICATION_ID, notification, type)
+            } catch (e: Exception) {
+                // マイク種別が許可されない状況(バックグラウンド起動等)では、カメラ+位置のみで再試行
+                Log.e(TAG, "startForegroundに失敗。マイク種別なしで再試行します", e)
+                try {
+                    startForeground(
+                        NOTIFICATION_ID, notification,
+                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or
+                            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                    )
+                } catch (e2: Exception) {
+                    Log.e(TAG, "startForegroundの再試行にも失敗しました。サービスを終了します", e2)
+                    stopSelf()
+                }
+            }
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }

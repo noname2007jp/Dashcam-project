@@ -297,7 +297,8 @@ class DashcamRecorder(
 
         currentSegmentDisplayName = fileName
         currentSegmentUri = null
-        segmentStartTimeMs = System.currentTimeMillis()
+        val startedAtMs = System.currentTimeMillis()
+        segmentStartTimeMs = startedAtMs
         listener.onSegmentStarted(fileName)
 
         currentRecording = vc.output
@@ -312,7 +313,7 @@ class DashcamRecorder(
                 }
             }
             .start(cameraExecutor) { event ->
-                handleRecordEvent(event)
+                handleRecordEvent(event, fileName, startedAtMs)
             }
 
         // 次のセグメントへの切り替えタイマーをセット
@@ -344,10 +345,10 @@ class DashcamRecorder(
         currentRecording = null
     }
 
-    private fun handleRecordEvent(event: VideoRecordEvent) {
+    private fun handleRecordEvent(event: VideoRecordEvent, segmentName: String, startedAtMs: Long) {
         when (event) {
             is VideoRecordEvent.Start -> {
-                Log.i(TAG, "セグメント録画開始: $currentSegmentDisplayName")
+                Log.i(TAG, "セグメント録画開始: $segmentName")
             }
             is VideoRecordEvent.Finalize -> {
                 if (event.hasError()) {
@@ -359,8 +360,8 @@ class DashcamRecorder(
                     // 容量確保後に再度 startLoopRecording() を呼ぶ想定
                 } else {
                     val uri = event.outputResults.outputUri
-                    val displayName = currentSegmentDisplayName
-                    val duration = System.currentTimeMillis() - segmentStartTimeMs
+                    val displayName: String? = segmentName
+                    val duration = System.currentTimeMillis() - startedAtMs
 
                     if (displayName != null) {
                         val shouldProtect = synchronized(protectionLock) {

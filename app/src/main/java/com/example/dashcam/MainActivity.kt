@@ -150,6 +150,8 @@ class MainActivity : AppCompatActivity() {
             togglePauseResume()
         }
 
+        findViewById<Button>(R.id.buttonQuitApp).setOnClickListener { quitApp() }
+
         buttonStop = findViewById(R.id.buttonStop)
         buttonStop.setOnClickListener {
             confirmAndStopDashcam()
@@ -237,6 +239,10 @@ class MainActivity : AppCompatActivity() {
         return when (item.itemId) {
             R.id.action_settings -> {
                 startActivity(Intent(this, SettingsActivity::class.java))
+                true
+            }
+            R.id.action_quit -> {
+                quitApp()
                 true
             }
             R.id.action_export -> {
@@ -338,6 +344,34 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("終了する") { _, _ -> performStop() }
             .setNegativeButton("キャンセル", null)
             .show()
+    }
+
+    /**
+     * アプリ自体を終了する(録画・カメラ・サービスを全て止めて画面も閉じる)。
+     * 録画中の場合のみ、設定に応じて確認ダイアログを出す。
+     */
+    private fun quitApp() {
+        if (DashcamForegroundService.isRecordingActive && settingsManager.confirmOnStop) {
+            AlertDialog.Builder(this)
+                .setTitle("アプリを終了しますか?")
+                .setMessage("録画中です。終了すると録画・各種検知も止まります。")
+                .setPositiveButton("終了する") { _, _ -> doQuitApp() }
+                .setNegativeButton("キャンセル", null)
+                .show()
+        } else {
+            doQuitApp()
+        }
+    }
+
+    private fun doQuitApp() {
+        cancelPseudoOff()
+        if (DashcamForegroundService.isRunning) stopDashcamService()
+        if (isBound) {
+            unbindService(serviceConnection)
+            isBound = false
+            boundService = null
+        }
+        finishAndRemoveTask()
     }
 
     private fun performStop() {

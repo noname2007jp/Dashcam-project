@@ -48,6 +48,8 @@ class MetadataRecorder(private val context: Context) {
         private const val SAMPLE_INTERVAL_MS = 1000L
         private const val LOCATION_UPDATE_INTERVAL_MS = 1000L
         private const val TMP_DIR_NAME = "metadata_tmp"
+        private const val LOOP_PATH = "Download/cam/dashcam_loop/"
+        private const val PROTECTED_PATH = "Download/cam/dashcam_protected/"
 
         private val ISO_FORMAT =
             SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.JAPAN)
@@ -73,6 +75,9 @@ class MetadataRecorder(private val context: Context) {
     @Volatile
     private var currentSegmentFile: File? = null
 
+    @Volatile
+    private var currentSegmentName: String? = null
+
     private val locationCallback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
             result.lastLocation?.let { lastLocation = it }
@@ -94,6 +99,7 @@ class MetadataRecorder(private val context: Context) {
         )
 
         scheduleSampling()
+        Thread { recoverOrphanedFiles() }.start()
         Log.i(TAG, "メタデータ記録を開始しました")
     }
 
@@ -102,7 +108,15 @@ class MetadataRecorder(private val context: Context) {
         isTracking = false
         fusedLocationClient.removeLocationUpdates(locationCallback)
         cancelSampling()
+        // 停止時に書きかけのセグメントが残っていると、終了処理の都合でJSONが欠落するため
+        // この時点で保存してしまう(最後のセグメントのJSONが無くなる問題の対策)
+        val file = currentSegmentFile
+        val name = currentSegmentName
         currentSegmentFile = null
+        currentSegmentName = null
+        if (file != null && name != null) {
+            uploadTmpFile(file, name.substringBeforeLast('.') + ".json", LOOP_PATH)
+        }
         Log.i(TAG, "メタデータ記録を停止しました")
     }
 
@@ -116,6 +130,7 @@ class MetadataRecorder(private val context: Context) {
         try {
             file.writeText("") // 新規作成/既存なら空にする
             currentSegmentFile = file
+            currentSegmentName = videoDisplayName
         } catch (e: Exception) {
             Log.e(TAG, "一時ファイルの作成に失敗しました: $baseName", e)
             currentSegmentFile = null
@@ -125,16 +140,24 @@ class MetadataRecorder(private val context: Context) {
     /**
      * セグメント完了時に呼ぶ。一時ファイルの内容をMediaStoreへアップロードし、
      * 一時ファイルを削除する。videoDisplayNameと同じベース名の .json として保存する。
+     *
+     * 一時ファイルは「現在のセグメント」ではなく動画名から特定する
+     * (停止・一時停止・次セグメント開始との競合で JSON が欠落するのを防ぐため)。
      */
     fun finalizeSegmentToMediaStore(videoDisplayName: String, relativePath: String) {
-        val file = currentSegmentFile
-        currentSegmentFile = null
+        val baseName = videoDisplayName.substringBeforeLast('.')
+        val file = File(tmpDir, "$baseName.jsonl")
+        if (currentSegmentFile == file) currentSegmentFile = null
+        uploadTmpFile(file, "$baseName.json", relativePath)
+    }
 
-        if (file == null || !file.exists() || file.length() == 0L) {
+    /** 一時ファイルをMediaStoreへ保存して削除する。空・存在しない場合は何もしない。 */
+    private fun uploadTmpFile(file: File, jsonName: String, relativePath: String) {
+        if (!file.exists()) return
+        if (file.length() == 0L) {
+            file.delete()
             return
         }
-
-        val jsonName = videoDisplayName.substringBeforeLast('.') + ".json"
         try {
             val contentValues = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, jsonName)
@@ -146,16 +169,43 @@ class MetadataRecorder(private val context: Context) {
             )
             if (itemUri == null) {
                 Log.e(TAG, "メタデータJSONの作成に失敗しました: $jsonName")
-                return
+                return // 一時ファイルは残し、次回起動時の回収に任せる
             }
             context.contentResolver.openOutputStream(itemUri)?.use { output ->
                 file.inputStream().use { input -> input.copyTo(output) }
             }
             Log.i(TAG, "メタデータ保存完了: $jsonName")
+            file.delete()
         } catch (e: Exception) {
             Log.e(TAG, "メタデータの保存に失敗しました: $jsonName", e)
-        } finally {
-            file.delete()
+        }
+    }
+
+    /**
+     * 前回アプリが異常終了した等で一時フォルダに残っているメタデータを回収する。
+     * 対応する動画が保護フォルダにあれば保護フォルダへ、それ以外はloopフォルダへ保存する。
+     */
+    private fun recoverOrphanedFiles() {
+        val orphans = tmpDir.listFiles { f -> f.extension == "jsonl" } ?: return
+        for (file in orphans) {
+            if (file == currentSegmentFile) continue
+            val baseName = file.nameWithoutExtension
+            val path = if (videoExistsIn(baseName + ".mp4", PROTECTED_PATH)) PROTECTED_PATH else LOOP_PATH
+            uploadTmpFile(file, "$baseName.json", path)
+        }
+    }
+
+    private fun videoExistsIn(displayName: String, relativePath: String): Boolean {
+        return try {
+            context.contentResolver.query(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.MediaColumns._ID),
+                "${MediaStore.MediaColumns.DISPLAY_NAME}=? AND ${MediaStore.MediaColumns.RELATIVE_PATH}=?",
+                arrayOf(displayName, relativePath),
+                null
+            )?.use { it.count > 0 } ?: false
+        } catch (e: Exception) {
+            false
         }
     }
 

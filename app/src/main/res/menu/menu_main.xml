@@ -6,6 +6,10 @@
         android:title="書き出し"
         app:showAsAction="never" />
     <item
+        android:id="@+id/action_quit"
+        android:title="アプリ終了"
+        app:showAsAction="never" />
+    <item
         android:id="@+id/action_settings"
         android:title="設定"
         android:icon="@drawable/ic_menu"

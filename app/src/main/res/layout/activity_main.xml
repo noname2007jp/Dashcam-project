@@ -61,6 +61,15 @@
 
     </LinearLayout>
 
+    <!-- アプリ終了ボタン(起動直後・録画中を問わず常に表示) -->
+    <Button
+        android:id="@+id/buttonQuitApp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_margin="16dp"
+        android:text="アプリ終了" />
+
     <!-- 疑似消灯用オーバーレイ。一定時間操作がないと表示され、タップで復帰する -->
     <View
         android:id="@+id/blackoutOverlay"
