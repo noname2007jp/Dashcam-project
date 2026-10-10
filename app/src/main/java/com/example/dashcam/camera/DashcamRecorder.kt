@@ -214,7 +214,7 @@ class DashcamRecorder(
             return
         }
         isRunning = true
-        startNewSegment()
+        scheduleStart(0L)
     }
 
     /** 録画を完全に停止する(駐車モードへの切り替え時などに呼び出す)。 */
@@ -274,6 +274,25 @@ class DashcamRecorder(
         }
     }
 
+    private var startFailures = 0
+
+    /**
+     * 次のセグメント開始を予約する。メインスレッドで実行し、前の録画の終了処理が
+     * 完全に終わってから開始する(Finalizeイベントの中で直接startすると、CameraX側が
+     * まだ「録画中」扱いで IllegalStateException になるため)。
+     */
+    private fun scheduleStart(delayMs: Long) {
+        segmentHandler.postDelayed({
+            if (!isRunning || released) return@postDelayed
+            if (currentRecording != null) {
+                // 前のセグメントがまだ終了処理中。少し待って再試行する
+                scheduleStart(300L)
+            } else {
+                startNewSegment()
+            }
+        }, delayMs)
+    }
+
     private fun startNewSegment() {
         val vc = videoCapture ?: run {
             Log.e(TAG, "VideoCapture が未初期化です")
@@ -295,13 +314,10 @@ class DashcamRecorder(
             .setContentValues(contentValues)
             .build()
 
-        currentSegmentDisplayName = fileName
-        currentSegmentUri = null
         val startedAtMs = System.currentTimeMillis()
-        segmentStartTimeMs = startedAtMs
-        listener.onSegmentStarted(fileName)
 
-        currentRecording = vc.output
+        try {
+            currentRecording = vc.output
             .prepareRecording(context, outputOptions)
             .apply {
                 // 音声(マイク)も録音する。RECORD_AUDIO が許可されていない場合は映像のみ
@@ -315,6 +331,26 @@ class DashcamRecorder(
             .start(cameraExecutor) { event ->
                 handleRecordEvent(event, fileName, startedAtMs)
             }
+        } catch (e: Exception) {
+            // 録画開始に失敗してもアプリを落とさず、少し待って再試行する
+            currentRecording = null
+            startFailures++
+            Log.e(TAG, "セグメント開始に失敗しました(${startFailures}回目)", e)
+            if (startFailures >= 20) {
+                startFailures = 0
+                isRunning = false
+                listener.onRecordingError(e)
+            } else if (isRunning) {
+                scheduleStart(500L)
+            }
+            return
+        }
+        startFailures = 0
+
+        currentSegmentDisplayName = fileName
+        currentSegmentUri = null
+        segmentStartTimeMs = startedAtMs
+        listener.onSegmentStarted(fileName)
 
         // 次のセグメントへの切り替えタイマーをセット
         scheduleSegmentRotation()
@@ -384,12 +420,15 @@ class DashcamRecorder(
                         }
                     }
                 }
-                currentRecording = null
-                currentSegmentUri = null
+                // 既に次のセグメントが始まっている場合はそちらの状態を消さない
+                if (currentSegmentDisplayName == segmentName || currentSegmentDisplayName == null) {
+                    currentRecording = null
+                    currentSegmentUri = null
+                }
 
-                // 継続録画中なら次のセグメントを開始(ループ)
+                // 継続録画中なら、終了処理が完全に終わってから次のセグメントを開始(ループ)
                 if (isRunning) {
-                    startNewSegment()
+                    scheduleStart(300L)
                 }
             }
             else -> {
