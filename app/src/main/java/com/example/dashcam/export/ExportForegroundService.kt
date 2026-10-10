@@ -91,6 +91,16 @@ class ExportForegroundService : Service() {
                 ?: VideoExportManager.OutputOrientation.LANDSCAPE.name
         )
 
+        if (metadataUri == null) {
+            // JSONが無ければ焼き込む内容がないため、書き出さずに完了する
+            _progressText.value = "メタデータ(JSON)がないため、書き出しは不要です"
+            // startForegroundServiceで起動された以上、必ずstartForegroundを呼んでから終了する
+            startForegroundWithNotification("メタデータ(JSON)がないため、書き出しは不要です")
+            stopForeground(STOP_FOREGROUND_DETACH)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
         if (sourceUri == null || displayName == null) {
             Log.e(TAG, "必要なパラメータが不足しています")
             stopSelf()
@@ -134,6 +144,10 @@ class ExportForegroundService : Service() {
                     _progressText.value = "100% 書き出し完了: ${result.displayName}"
                     updateNotification("書き出し完了: ${result.displayName}", ongoing = false)
                     Log.i(TAG, "書き出し完了: ${result.displayName}")
+                }
+                is VideoExportManager.Result.NoMetadata -> {
+                    _progressText.value = "メタデータ(JSON)がないため、書き出しは不要です"
+                    updateNotification("メタデータ(JSON)がないため、書き出しは不要です", ongoing = false)
                 }
                 is VideoExportManager.Result.Failure -> {
                     _progressText.value = "書き出しに失敗しました: ${result.error.message}"

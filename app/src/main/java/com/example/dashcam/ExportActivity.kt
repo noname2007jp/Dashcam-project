@@ -161,6 +161,13 @@ class ExportActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val metadataUri = withContext(Dispatchers.IO) { findMetadataJsonUri(displayName) }
 
+            if (metadataUri == null) {
+                // JSONが無い動画は焼き込む内容がないため、書き出さずに完了する
+                textProgress.text = "メタデータ(JSON)がないため、書き出しは不要です"
+                Toast.makeText(this@ExportActivity, "メタデータ(JSON)がないため、書き出しは不要です", Toast.LENGTH_LONG).show()
+                return@launch
+            }
+
             val intent = Intent(this@ExportActivity, ExportForegroundService::class.java).apply {
                 action = ExportForegroundService.ACTION_START_EXPORT
                 putExtra(ExportForegroundService.EXTRA_SOURCE_URI, videoUri)

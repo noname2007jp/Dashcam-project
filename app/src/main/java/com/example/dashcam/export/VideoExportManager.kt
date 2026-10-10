@@ -38,6 +38,9 @@ class VideoExportManager(private val context: Context) {
     sealed class Result {
         data class Success(val outputUri: Uri, val displayName: String) : Result()
         data class Failure(val error: Throwable) : Result()
+
+        /** メタデータ(JSON)が無い/空のため、焼き込む内容がなく書き出しを行わなかった */
+        object NoMetadata : Result()
     }
 
     /**
@@ -80,6 +83,9 @@ class VideoExportManager(private val context: Context) {
 
             onProgress("メタデータを読み込み中", 0)
             val samples = metadataJsonUri?.let { loadSamples(it) } ?: emptyList()
+            if (samples.isEmpty()) {
+                return@withContext Result.NoMetadata
+            }
             val videoStartEpochMs = samples.firstOrNull()?.timestampMs
                 ?: System.currentTimeMillis()
             val overlayRenderer = OverlayTextRenderer(samples, videoStartEpochMs, options)
