@@ -245,6 +245,10 @@ class MainActivity : AppCompatActivity() {
                 quitApp()
                 true
             }
+            R.id.action_map -> {
+                startActivity(Intent(this, MapPlaybackActivity::class.java))
+                true
+            }
             R.id.action_export -> {
                 startActivity(Intent(this, ExportActivity::class.java))
                 true

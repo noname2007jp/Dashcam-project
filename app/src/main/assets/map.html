@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>html,body,#map{height:100%;margin:0;background:#ddd}</style>
+</head><body><div id="map"></div>
+<script>
+var prov = 'osm', map = null, route = null, cur = null, evMarkers = [], info = null;
+
+function loadScript(src, cb) {
+  var s = document.createElement('script');
+  s.src = src; s.onload = cb;
+  s.onerror = function () { Android.onMapError('地図ライブラリを読み込めませんでした(通信状況を確認してください)'); };
+  document.head.appendChild(s);
+}
+function loadCss(href) {
+  var l = document.createElement('link'); l.rel = 'stylesheet'; l.href = href; document.head.appendChild(l);
+}
+function color(t) { return t === 'shock' ? '#e53935' : '#fb8c00'; }
+
+function start(p, key) {
+  prov = p;
+  if (p === 'google') {
+    window.gm_authFailure = function () {
+      Android.onMapError('Google Maps のAPIキーが無効、または利用が許可されていません');
+    };
+    window.gmReady = function () {
+      map = new google.maps.Map(document.getElementById('map'), {
+        center: { lat: 35.68, lng: 139.76 }, zoom: 5,
+        mapTypeControl: false, streetViewControl: false, fullscreenControl: false
+      });
+      info = new google.maps.InfoWindow();
+      Android.onMapReady();
+    };
+    loadScript('https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(key) + '&callback=gmReady', function () {});
+  } else {
+    loadCss('https://unpkg.com/leaflet@1.9.4/dist/leaflet.css');
+    loadScript('https://unpkg.com/leaflet@1.9.4/dist/leaflet.js', function () {
+      map = L.map('map').setView([35.68, 139.76], 5);
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
+      }).addTo(map);
+      Android.onMapReady();
+    });
+  }
+}
+
+function clearAll() {
+  if (prov === 'google') {
+    if (route) route.setMap(null);
+    if (cur) cur.setMap(null);
+    evMarkers.forEach(function (m) { m.setMap(null); });
+  } else {
+    if (route) map.removeLayer(route);
+    if (cur) map.removeLayer(cur);
+    evMarkers.forEach(function (m) { map.removeLayer(m); });
+  }
+  route = null; cur = null; evMarkers = [];
+}
+
+function setData(d) {
+  clearAll();
+  var pts = d.points;
+  if (!pts.length) return;
+  if (prov === 'google') {
+    var path = pts.map(function (p) { return { lat: p[0], lng: p[1] }; });
+    route = new google.maps.Polyline({ path: path, strokeColor: '#1e88e5', strokeWeight: 5, map: map });
+    var b = new google.maps.LatLngBounds();
+    path.forEach(function (p) { b.extend(p); });
+    map.fitBounds(b);
+    cur = new google.maps.Marker({
+      position: path[0], map: map, zIndex: 1000,
+      icon: { path: google.maps.SymbolPath.CIRCLE, scale: 9, fillColor: '#1e88e5', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 3 }
+    });
+    d.events.forEach(function (e) {
+      var m = new google.maps.Marker({
+        position: { lat: e.lat, lng: e.lon }, map: map, title: e.label, zIndex: 500,
+        icon: { path: google.maps.SymbolPath.CIRCLE, scale: 10, fillColor: color(e.type), fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2 }
+      });
+      m.addListener('click', function () {
+        info.setContent(e.label); info.open(map, m); Android.onEventClick(e.i);
+      });
+      evMarkers.push(m);
+    });
+  } else {
+    route = L.polyline(pts, { color: '#1e88e5', weight: 5 }).addTo(map);
+    map.fitBounds(route.getBounds(), { padding: [30, 30] });
+    cur = L.circleMarker(pts[0], { radius: 9, color: '#fff', weight: 3, fillColor: '#1e88e5', fillOpacity: 1 }).addTo(map);
+    d.events.forEach(function (e) {
+      var m = L.circleMarker([e.lat, e.lon], { radius: 10, color: '#fff', weight: 2, fillColor: color(e.type), fillOpacity: 1 }).addTo(map);
+      m.bindPopup(e.label);
+      m.on('click', function () { Android.onEventClick(e.i); });
+      evMarkers.push(m);
+    });
+  }
+}
+
+function setPos(lat, lon) {
+  if (!cur) return;
+  if (prov === 'google') {
+    var p = { lat: lat, lng: lon };
+    cur.setPosition(p);
+    var bd = map.getBounds();
+    if (bd && !bd.contains(p)) map.panTo(p);
+  } else {
+    cur.setLatLng([lat, lon]);
+    if (!map.getBounds().contains([lat, lon])) map.panTo([lat, lon]);
+  }
+}
+</script></body></html>

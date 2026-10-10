@@ -237,5 +237,53 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content" />
 
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="24dp"
+        android:layout_marginBottom="16dp"
+        android:background="#CCCCCC" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="走行再生の地図"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="8dp" />
+
+    <RadioGroup
+        android:id="@+id/radioMapProvider"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content">
+
+        <RadioButton
+            android:id="@+id/radioMapOsm"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="OpenStreetMap(標準・キー不要)" />
+
+        <RadioButton
+            android:id="@+id/radioMapGoogle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Google マップ(APIキーが必要)" />
+    </RadioGroup>
+
+    <EditText
+        android:id="@+id/editGoogleKey"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Google Maps JavaScript API キー"
+        android:inputType="textNoSuggestions"
+        android:singleLine="true" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="※ どちらも地図の表示に通信が必要です。OpenStreetMapは公開タイルサーバーを使うため、個人の軽い利用に限ります。Googleマップは、Google Cloudでの請求先設定とAPIキーの発行が必要で、利用量によっては課金されます。キーはこの端末内にのみ保存されます。"
+        android:textSize="12sp" />
+
 </LinearLayout>
 </ScrollView>

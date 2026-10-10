@@ -170,10 +170,50 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
 
+        setupMapProvider()
+
         findViewById<android.widget.CheckBox>(R.id.checkConfirmOnStop).apply {
             isChecked = settingsManager.confirmOnStop
             setOnCheckedChangeListener { _, checked -> settingsManager.confirmOnStop = checked }
         }
+    }
+
+    private fun setupMapProvider() {
+        val group = findViewById<android.widget.RadioGroup>(R.id.radioMapProvider)
+        val editKey = findViewById<android.widget.EditText>(R.id.editGoogleKey)
+        val isGoogle = settingsManager.mapProvider == SettingsManager.MAP_GOOGLE
+        group.check(if (isGoogle) R.id.radioMapGoogle else R.id.radioMapOsm)
+        editKey.setText(settingsManager.googleMapsApiKey)
+        editKey.isEnabled = isGoogle
+
+        group.setOnCheckedChangeListener { _, id ->
+            val google = id == R.id.radioMapGoogle
+            settingsManager.mapProvider =
+                if (google) SettingsManager.MAP_GOOGLE else SettingsManager.MAP_OSM
+            editKey.isEnabled = google
+            if (google) {
+                androidx.appcompat.app.AlertDialog.Builder(this)
+                    .setTitle("Googleマップを使う場合の注意")
+                    .setMessage(
+                        "・Google Cloudでプロジェクトを作成し、請求先アカウントの設定と" +
+                            "「Maps JavaScript API」の有効化が必要です。\n" +
+                            "・利用量によっては料金が発生します(個人の少量利用は無料枠内の想定ですが、" +
+                            "Google側の条件が変わる場合があります)。\n" +
+                            "・APIキーは、意図しない利用を防ぐため「HTTPリファラー制限」に " +
+                            "https://dashcam.example/* を指定してください。\n" +
+                            "・キーが空・無効な場合は、自動的にOpenStreetMapで表示します。"
+                    )
+                    .setPositiveButton("OK", null)
+                    .show()
+            }
+        }
+        editKey.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
+            override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                settingsManager.googleMapsApiKey = s?.toString() ?: ""
+            }
+        })
     }
 
     private fun setupScreenTimeoutSpinner() {

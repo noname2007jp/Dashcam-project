@@ -23,6 +23,10 @@ class SettingsManager(context: Context) {
         private const val KEY_SHOCK_PARKING_THRESHOLD = "shock_parking_threshold_g"
         private const val KEY_TAILGATING_THRESHOLD = "tailgating_threshold_g"
         private const val KEY_PARKING_MOTION_RECORDING = "parking_motion_recording"
+        private const val KEY_MAP_PROVIDER = "map_provider"
+        private const val KEY_GOOGLE_MAPS_KEY = "google_maps_api_key"
+        const val MAP_OSM = "osm"
+        const val MAP_GOOGLE = "google"
         private const val KEY_CONFIRM_ON_STOP = "confirm_on_stop"
         private const val KEY_SCREEN_TIMEOUT_SECONDS = "screen_timeout_seconds"
 
@@ -102,6 +106,20 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean(KEY_PARKING_MOTION_RECORDING, true)
         set(value) {
             prefs.edit().putBoolean(KEY_PARKING_MOTION_RECORDING, value).apply()
+        }
+
+    /** 走行再生で使う地図。既定はOpenStreetMap。 */
+    var mapProvider: String
+        get() = prefs.getString(KEY_MAP_PROVIDER, MAP_OSM) ?: MAP_OSM
+        set(value) {
+            prefs.edit().putString(KEY_MAP_PROVIDER, value).apply()
+        }
+
+    /** Google Maps JavaScript API のキー(Google地図を選んだ場合のみ使用。端末内に保存)。 */
+    var googleMapsApiKey: String
+        get() = prefs.getString(KEY_GOOGLE_MAPS_KEY, "") ?: ""
+        set(value) {
+            prefs.edit().putString(KEY_GOOGLE_MAPS_KEY, value.trim()).apply()
         }
 
     /** 「終了」ボタン押下時に確認ダイアログを出すか(既定: 出す)。 */

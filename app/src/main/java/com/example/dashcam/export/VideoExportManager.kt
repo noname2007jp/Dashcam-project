@@ -7,6 +7,7 @@ import android.net.Uri
 import android.provider.MediaStore
 import android.util.Log
 import org.json.JSONArray
+import com.example.dashcam.metadata.MetadataParser
 import com.example.dashcam.metadata.MetadataRecorder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -207,56 +208,8 @@ class VideoExportManager(private val context: Context) {
      */
     private fun loadMetadata(
         metadataJsonUri: Uri
-    ): Pair<List<MetadataRecorder.Sample>, List<MetadataRecorder.Event>> {
-        return try {
-            val text = context.contentResolver.openInputStream(metadataJsonUri)
-                ?.bufferedReader()?.use { it.readText() } ?: return emptyList<MetadataRecorder.Sample>() to emptyList()
-            val trimmed = text.trim()
-            if (trimmed.isEmpty()) {
-                emptyList<MetadataRecorder.Sample>() to emptyList()
-            } else if (trimmed.startsWith("[")) {
-                // 旧形式(JSON配列。イベントなし)
-                val jsonArray = JSONArray(trimmed)
-                (0 until jsonArray.length()).mapNotNull { i ->
-                    parseSample(jsonArray.optJSONObject(i))
-                } to emptyList()
-            } else {
-                // 現行形式(JSON Lines)。"type":"event" の行はイベント、それ以外はサンプル
-                val samples = mutableListOf<MetadataRecorder.Sample>()
-                val events = mutableListOf<MetadataRecorder.Event>()
-                trimmed.lineSequence().filter { it.isNotBlank() }.forEach { line ->
-                    runCatching {
-                        val obj = org.json.JSONObject(line)
-                        if (obj.optString("type") == "event") {
-                            events.add(
-                                MetadataRecorder.Event(
-                                    timestampMs = obj.getLong("timestamp_ms"),
-                                    type = obj.optString("event"),
-                                    g = if (obj.isNull("g")) null else obj.getDouble("g").toFloat()
-                                )
-                            )
-                        } else {
-                            parseSample(obj)?.let { samples.add(it) }
-                        }
-                    }
-                }
-                samples to events
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "メタデータJSONの読み込みに失敗しました", e)
-            emptyList<MetadataRecorder.Sample>() to emptyList()
-        }
-    }
-
-    private fun parseSample(obj: org.json.JSONObject?): MetadataRecorder.Sample? {
-        obj ?: return null
-        return MetadataRecorder.Sample(
-            timestampMs = obj.getLong("timestamp_ms"),
-            latitude = if (obj.isNull("latitude")) null else obj.getDouble("latitude"),
-            longitude = if (obj.isNull("longitude")) null else obj.getDouble("longitude"),
-            speedKmh = if (obj.isNull("speed_kmh")) null else obj.getDouble("speed_kmh").toFloat()
-        )
-    }
+    ): Pair<List<MetadataRecorder.Sample>, List<MetadataRecorder.Event>> =
+        MetadataParser.load(context, metadataJsonUri)
 
     private fun saveToMediaStore(file: File, displayName: String): Uri? {
         val contentValues = ContentValues().apply {
