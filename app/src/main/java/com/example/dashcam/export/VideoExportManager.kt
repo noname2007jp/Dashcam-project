@@ -82,13 +82,16 @@ class VideoExportManager(private val context: Context) {
             )
 
             onProgress("メタデータを読み込み中", 0)
-            val samples = metadataJsonUri?.let { loadSamples(it) } ?: emptyList()
+            val (samples, events) = metadataJsonUri?.let { loadMetadata(it) }
+                ?: (emptyList<MetadataRecorder.Sample>() to emptyList<MetadataRecorder.Event>())
             if (samples.isEmpty()) {
                 return@withContext Result.NoMetadata
             }
             val videoStartEpochMs = samples.firstOrNull()?.timestampMs
                 ?: System.currentTimeMillis()
-            val overlayRenderer = OverlayTextRenderer(samples, videoStartEpochMs, options)
+            val overlayRenderer = OverlayTextRenderer(
+                samples, videoStartEpochMs, options, events, sourceInfo.durationMs
+            )
 
             onProgress("映像にテキストを焼き込み中", 0)
             val processor = VideoOverlayProcessor(
@@ -136,7 +139,8 @@ class VideoExportManager(private val context: Context) {
         val width: Int,
         val height: Int,
         val bitRate: Int,
-        val frameRate: Int
+        val frameRate: Int,
+        val durationMs: Long = 0L
     )
 
     /**
@@ -182,7 +186,11 @@ class VideoExportManager(private val context: Context) {
                     "${width}x${height} に出力"
             )
 
-            SourceVideoInfo(width, height, bitRate, frameRate)
+            val durationMs = retriever.extractMetadata(
+                MediaMetadataRetriever.METADATA_KEY_DURATION
+            )?.toLongOrNull() ?: 0L
+
+            SourceVideoInfo(width, height, bitRate, frameRate, durationMs)
         } catch (e: Exception) {
             Log.e(TAG, "元動画の情報取得に失敗したため既定値を使用します", e)
             SourceVideoInfo(DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_BIT_RATE, DEFAULT_FRAME_RATE)
@@ -197,31 +205,46 @@ class VideoExportManager(private val context: Context) {
      * 1秒ごとに逐次追記する形式)。念のため、旧形式(JSON配列をまとめて書き出す形式)
      * のファイルも読めるようフォールバックを用意している。
      */
-    private fun loadSamples(metadataJsonUri: Uri): List<MetadataRecorder.Sample> {
+    private fun loadMetadata(
+        metadataJsonUri: Uri
+    ): Pair<List<MetadataRecorder.Sample>, List<MetadataRecorder.Event>> {
         return try {
             val text = context.contentResolver.openInputStream(metadataJsonUri)
-                ?.bufferedReader()?.use { it.readText() } ?: return emptyList()
+                ?.bufferedReader()?.use { it.readText() } ?: return emptyList<MetadataRecorder.Sample>() to emptyList()
             val trimmed = text.trim()
             if (trimmed.isEmpty()) {
-                emptyList()
+                emptyList<MetadataRecorder.Sample>() to emptyList()
             } else if (trimmed.startsWith("[")) {
-                // 旧形式(JSON配列)
+                // 旧形式(JSON配列。イベントなし)
                 val jsonArray = JSONArray(trimmed)
                 (0 until jsonArray.length()).mapNotNull { i ->
                     parseSample(jsonArray.optJSONObject(i))
-                }
+                } to emptyList()
             } else {
-                // 現行形式(JSON Lines)
-                trimmed.lineSequence()
-                    .filter { it.isNotBlank() }
-                    .mapNotNull { line ->
-                        runCatching { parseSample(org.json.JSONObject(line)) }.getOrNull()
+                // 現行形式(JSON Lines)。"type":"event" の行はイベント、それ以外はサンプル
+                val samples = mutableListOf<MetadataRecorder.Sample>()
+                val events = mutableListOf<MetadataRecorder.Event>()
+                trimmed.lineSequence().filter { it.isNotBlank() }.forEach { line ->
+                    runCatching {
+                        val obj = org.json.JSONObject(line)
+                        if (obj.optString("type") == "event") {
+                            events.add(
+                                MetadataRecorder.Event(
+                                    timestampMs = obj.getLong("timestamp_ms"),
+                                    type = obj.optString("event"),
+                                    g = if (obj.isNull("g")) null else obj.getDouble("g").toFloat()
+                                )
+                            )
+                        } else {
+                            parseSample(obj)?.let { samples.add(it) }
+                        }
                     }
-                    .toList()
+                }
+                samples to events
             }
         } catch (e: Exception) {
             Log.e(TAG, "メタデータJSONの読み込みに失敗しました", e)
-            emptyList()
+            emptyList<MetadataRecorder.Sample>() to emptyList()
         }
     }
 

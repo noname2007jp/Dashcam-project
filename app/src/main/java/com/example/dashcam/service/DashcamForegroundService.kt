@@ -391,6 +391,7 @@ class DashcamForegroundService : LifecycleService() {
                 override fun onTailgatingSuspected(eventCount: Int) {
                     Log.i(TAG, "煽り運転の可能性を検知(急ブレーキ${eventCount}回)")
                     if (isPausedByUser) return
+                    metadataRecorder?.recordEvent(MetadataRecorder.EVENT_BRAKING, null)
                     // 衝撃検知と同じ保護ロジックで前後のセグメントを保護対象にする
                     recorder?.markCurrentSegmentAsProtected()
                     updateNotification("煽り運転の可能性を検知しました(急ブレーキ${eventCount}回)")
@@ -423,6 +424,7 @@ class DashcamForegroundService : LifecycleService() {
                         // 一時停止中は録画していないため保護対象もない
                         return
                     }
+                    metadataRecorder?.recordEvent(MetadataRecorder.EVENT_SHOCK, magnitudeG)
                     // 駐車監視中で、まだ動体検知による録画が始まっていない場合でも
                     // 衝撃検知自体をトリガーに録画を開始する(当て逃げ等の瞬間対策)
                     if (isParkingMode) {

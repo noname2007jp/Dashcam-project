@@ -58,6 +58,13 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="速度(km/h)"
+            android:checked="true" />
+
+        <CheckBox
+            android:id="@+id/checkEvents"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="イベントマーク(衝撃・急ブレーキ)"
             android:checked="true"
             android:layout_marginBottom="16dp" />
 

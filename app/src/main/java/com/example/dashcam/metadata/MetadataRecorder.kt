@@ -43,7 +43,16 @@ class MetadataRecorder(private val context: Context) {
         val speedKmh: Float?
     )
 
+    /** 衝撃・急ブレーキ等のイベント。書き出し時のマーク表示に使う。 */
+    data class Event(
+        val timestampMs: Long,
+        val type: String, // EVENT_SHOCK / EVENT_BRAKING
+        val g: Float?
+    )
+
     companion object {
+        const val EVENT_SHOCK = "shock"
+        const val EVENT_BRAKING = "braking"
         private const val TAG = "MetadataRecorder"
         private const val SAMPLE_INTERVAL_MS = 1000L
         private const val LOCATION_UPDATE_INTERVAL_MS = 1000L
@@ -277,6 +286,27 @@ class MetadataRecorder(private val context: Context) {
         appendSampleToCurrentFile(sample)
     }
 
+    private val fileLock = Any()
+
+    /**
+     * 衝撃・急ブレーキなどのイベントを、現在のセグメントのメタデータへ記録する。
+     * 1行のJSON({"type":"event",...})として追記する(サンプル行とは区別される)。
+     */
+    fun recordEvent(eventType: String, g: Float?) {
+        val file = currentSegmentFile ?: return
+        try {
+            val obj = JSONObject().apply {
+                put("type", "event")
+                put("timestamp_ms", System.currentTimeMillis())
+                put("event", eventType)
+                put("g", if (g != null) g.toDouble() else JSONObject.NULL)
+            }
+            synchronized(fileLock) { file.appendText(obj.toString() + "\n") }
+        } catch (e: Exception) {
+            Log.e(TAG, "イベントの記録に失敗しました", e)
+        }
+    }
+
     private fun appendSampleToCurrentFile(sample: Sample) {
         val file = currentSegmentFile ?: return // セグメント未開始中はサンプリングのみ行い記録しない
         try {
@@ -287,7 +317,7 @@ class MetadataRecorder(private val context: Context) {
                 put("longitude", sample.longitude ?: JSONObject.NULL)
                 put("speed_kmh", sample.speedKmh ?: JSONObject.NULL)
             }
-            file.appendText(obj.toString() + "\n")
+            synchronized(fileLock) { file.appendText(obj.toString() + "\n") }
         } catch (e: Exception) {
             Log.e(TAG, "メタデータの逐次書き込みに失敗しました", e)
         }

@@ -42,6 +42,7 @@ class ExportForegroundService : Service() {
         const val EXTRA_SHOW_DATE = "show_date"
         const val EXTRA_SHOW_LOCATION = "show_location"
         const val EXTRA_SHOW_SPEED = "show_speed"
+        const val EXTRA_SHOW_EVENTS = "show_events"
         const val EXTRA_POSITION = "position"
         const val EXTRA_ORIENTATION = "orientation"
 
@@ -82,6 +83,7 @@ class ExportForegroundService : Service() {
             showDate = intent.getBooleanExtra(EXTRA_SHOW_DATE, true),
             showLocation = intent.getBooleanExtra(EXTRA_SHOW_LOCATION, true),
             showSpeed = intent.getBooleanExtra(EXTRA_SHOW_SPEED, true),
+            showEventMarks = intent.getBooleanExtra(EXTRA_SHOW_EVENTS, true),
             position = ExportOptions.Position.valueOf(
                 intent.getStringExtra(EXTRA_POSITION) ?: ExportOptions.Position.BOTTOM_LEFT.name
             )

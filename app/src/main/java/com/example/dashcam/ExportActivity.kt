@@ -37,6 +37,7 @@ class ExportActivity : AppCompatActivity() {
     private lateinit var checkDate: CheckBox
     private lateinit var checkLocation: CheckBox
     private lateinit var checkSpeed: CheckBox
+    private lateinit var checkEvents: CheckBox
     private lateinit var spinnerPosition: Spinner
     private lateinit var radioGroupOrientation: RadioGroup
 
@@ -82,6 +83,7 @@ class ExportActivity : AppCompatActivity() {
         checkDate = findViewById(R.id.checkDate)
         checkLocation = findViewById(R.id.checkLocation)
         checkSpeed = findViewById(R.id.checkSpeed)
+        checkEvents = findViewById(R.id.checkEvents)
         spinnerPosition = findViewById(R.id.spinnerPosition)
         radioGroupOrientation = findViewById(R.id.radioGroupOrientation)
 
@@ -147,6 +149,7 @@ class ExportActivity : AppCompatActivity() {
             showDate = checkDate.isChecked,
             showLocation = checkLocation.isChecked,
             showSpeed = checkSpeed.isChecked,
+            showEventMarks = checkEvents.isChecked,
             position = positionOptions[spinnerPosition.selectedItemPosition].second
         )
 
@@ -178,6 +181,7 @@ class ExportActivity : AppCompatActivity() {
                 putExtra(ExportForegroundService.EXTRA_SHOW_DATE, options.showDate)
                 putExtra(ExportForegroundService.EXTRA_SHOW_LOCATION, options.showLocation)
                 putExtra(ExportForegroundService.EXTRA_SHOW_SPEED, options.showSpeed)
+                putExtra(ExportForegroundService.EXTRA_SHOW_EVENTS, options.showEventMarks)
                 putExtra(ExportForegroundService.EXTRA_POSITION, options.position.name)
                 putExtra(ExportForegroundService.EXTRA_ORIENTATION, orientation.name)
             }
