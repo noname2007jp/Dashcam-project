@@ -27,6 +27,7 @@ class SettingsManager(context: Context) {
         private const val KEY_GOOGLE_MAPS_KEY = "google_maps_api_key"
         const val MAP_OSM = "osm"
         const val MAP_GOOGLE = "google"
+        private const val KEY_STOP_ON_TASK_REMOVED = "stop_on_task_removed"
         private const val KEY_CONFIRM_ON_STOP = "confirm_on_stop"
         private const val KEY_SCREEN_TIMEOUT_SECONDS = "screen_timeout_seconds"
 
@@ -120,6 +121,13 @@ class SettingsManager(context: Context) {
         get() = prefs.getString(KEY_GOOGLE_MAPS_KEY, "") ?: ""
         set(value) {
             prefs.edit().putString(KEY_GOOGLE_MAPS_KEY, value.trim()).apply()
+        }
+
+    /** アプリを最近使用したアプリ一覧から消したとき、録画も含めて全て停止するか(既定: 停止する)。 */
+    var stopOnTaskRemoved: Boolean
+        get() = prefs.getBoolean(KEY_STOP_ON_TASK_REMOVED, true)
+        set(value) {
+            prefs.edit().putBoolean(KEY_STOP_ON_TASK_REMOVED, value).apply()
         }
 
     /** 「終了」ボタン押下時に確認ダイアログを出すか(既定: 出す)。 */

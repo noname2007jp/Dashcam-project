@@ -122,7 +122,30 @@ class DashcamForegroundService : LifecycleService() {
     /** アプリがタスク一覧から消された場合、録画中でなければカメラを閉じて終了する */
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        if (!isRecordingActive) stopRecordingAndSelf()
+        // 設定で許可されていれば録画中でも止める(カメラを使いっぱなしにしない)
+        if (!isRecordingActive || settingsManager.stopOnTaskRemoved) stopRecordingAndSelf()
+    }
+
+    // 画面(Activity)が1つも接続していない状態が続いたら、録画中でなければ自動停止する。
+    // 画面回転での再生成など短時間の切断では止めない(3秒の猶予)。
+    private var clientCount = 0
+    private val idleHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val idleCheck = Runnable {
+        if (clientCount == 0 && !isRecordingActive && !isStopping) {
+            Log.i(TAG, "画面が接続されていない待機状態のため、カメラを解放して停止します")
+            stopRecordingAndSelf()
+        }
+    }
+
+    private fun scheduleIdleCheck(delayMs: Long) {
+        idleHandler.removeCallbacks(idleCheck)
+        idleHandler.postDelayed(idleCheck, delayMs)
+    }
+
+    override fun onUnbind(intent: Intent): Boolean {
+        clientCount = (clientCount - 1).coerceAtLeast(0)
+        if (clientCount == 0 && !isRecordingActive) scheduleIdleCheck(3_000L)
+        return super.onUnbind(intent)
     }
 
     /** Activityが非表示になったときに呼び出し、プレビュー描画を止める。 */
@@ -571,10 +594,13 @@ class DashcamForegroundService : LifecycleService() {
 
         pendingSurfaceProvider?.let { recorder?.setPreviewSurfaceProvider(it) }
         recorder?.initialize()
+        // 起動後30秒たっても画面が接続しなければ(起動途中でアプリが閉じられた等)自動停止する
+        scheduleIdleCheck(30_000L)
         updateNotification("プレビュー待機中(「開始」で録画を始めます)")
     }
 
     private fun stopRecordingAndSelf() {
+        idleHandler.removeCallbacks(idleCheck)
         isStopping = true
         isRecordingActive = false
         recorder?.release()
@@ -593,6 +619,7 @@ class DashcamForegroundService : LifecycleService() {
     }
 
     override fun onDestroy() {
+        idleHandler.removeCallbacks(idleCheck)
         recorder?.release()
         recorder = null
         motionDetector = null
@@ -613,6 +640,8 @@ class DashcamForegroundService : LifecycleService() {
     // startForegroundServiceで起動されつつ、MainActivityからbindServiceもされる
     override fun onBind(intent: Intent): IBinder {
         super.onBind(intent)
+        clientCount++
+        idleHandler.removeCallbacks(idleCheck)
         return binder
     }
 }

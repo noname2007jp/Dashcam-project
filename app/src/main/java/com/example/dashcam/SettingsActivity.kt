@@ -172,6 +172,11 @@ class SettingsActivity : AppCompatActivity() {
 
         setupMapProvider()
 
+        findViewById<android.widget.CheckBox>(R.id.checkStopOnTaskRemoved).apply {
+            isChecked = settingsManager.stopOnTaskRemoved
+            setOnCheckedChangeListener { _, checked -> settingsManager.stopOnTaskRemoved = checked }
+        }
+
         findViewById<android.widget.CheckBox>(R.id.checkConfirmOnStop).apply {
             isChecked = settingsManager.confirmOnStop
             setOnCheckedChangeListener { _, checked -> settingsManager.confirmOnStop = checked }

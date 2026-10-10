@@ -123,6 +123,7 @@ class ExportForegroundService : Service() {
         orientation: VideoExportManager.OutputOrientation
     ) {
         isExporting = true
+        acquireWakeLock()
         _progressText.value = "0% 準備中"
         exportJob = serviceScope.launch {
             val manager = VideoExportManager(this@ExportForegroundService)
@@ -140,6 +141,7 @@ class ExportForegroundService : Service() {
             )
 
             isExporting = false
+            releaseWakeLock()
 
             when (result) {
                 is VideoExportManager.Result.Success -> {
@@ -164,6 +166,25 @@ class ExportForegroundService : Service() {
             stopForeground(STOP_FOREGROUND_DETACH)
             stopSelf()
         }
+    }
+
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
+
+    /** 画面が消灯してもCPUが眠らず書き出しが続くよう、書き出し中だけ保持する */
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+        wakeLock = pm.newWakeLock(
+            android.os.PowerManager.PARTIAL_WAKE_LOCK, "Dashcam::ExportWakeLock"
+        ).apply {
+            setReferenceCounted(false)
+            acquire(3 * 60 * 60 * 1000L /*3時間の安全上限*/)
+        }
+    }
+
+    private fun releaseWakeLock() {
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
     }
 
     private fun startForegroundWithNotification(text: String) {
@@ -219,6 +240,7 @@ class ExportForegroundService : Service() {
     override fun onDestroy() {
         exportJob?.cancel()
         isExporting = false
+        releaseWakeLock()
         super.onDestroy()
     }
 

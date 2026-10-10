@@ -205,6 +205,12 @@
         android:layout_marginBottom="8dp" />
 
     <CheckBox
+        android:id="@+id/checkStopOnTaskRemoved"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="アプリを一覧から消したとき、録画も停止してカメラを解放する" />
+
+    <CheckBox
         android:id="@+id/checkConfirmOnStop"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
