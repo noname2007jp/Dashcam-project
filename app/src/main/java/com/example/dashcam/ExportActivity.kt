@@ -61,6 +61,24 @@ class ExportActivity : AppCompatActivity() {
         buttonExport.isEnabled = true
     }
 
+    // 自動で見つからなかったJSONを、ユーザーが手動で選ぶためのピッカー
+    private var pendingExportArgs: (() -> Unit)? = null
+    private var manualJsonUri: Uri? = null
+    private val jsonPickerLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri == null) {
+            textProgress.text = "JSONが選択されなかったため、書き出しを行いませんでした"
+            return@registerForActivityResult
+        }
+        try {
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } catch (_: Exception) {
+        }
+        manualJsonUri = uri
+        pendingExportArgs?.invoke()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_export)
@@ -165,19 +183,51 @@ class ExportActivity : AppCompatActivity() {
             val metadataUri = withContext(Dispatchers.IO) { findMetadataJsonUri(displayName) }
 
             if (metadataUri == null) {
-                // JSONが無い動画は焼き込む内容がないため、書き出さずに完了する
-                textProgress.text = "メタデータ(JSON)がないため、書き出しは不要です"
-                Toast.makeText(this@ExportActivity, "メタデータ(JSON)がないため、書き出しは不要です", Toast.LENGTH_LONG).show()
+                // 自動検索で見つからない場合(アプリを入れ直した後など、端末側の都合で
+                // アプリから見えないことがある)は、手動でJSONを選べるようにする
+                textProgress.text = "対応するJSONが自動では見つかりませんでした"
+                pendingExportArgs = {
+                    val picked = manualJsonUri
+                    if (picked != null) launchExport(videoUri, displayName, picked, options, orientation)
+                }
+                androidx.appcompat.app.AlertDialog.Builder(this@ExportActivity)
+                    .setTitle("JSONが見つかりません")
+                    .setMessage(
+                        "「" + displayName.substringBeforeLast('.') + ".json」を自動では探せませんでした。\n" +
+                            "(アプリを入れ直した後などは、ファイルがあってもアプリから見えないことがあります)\n\n" +
+                            "ファイルを手動で選びますか?\n選ばない場合、JSONが無いため書き出しは不要として終了します。"
+                    )
+                    .setPositiveButton("JSONを選ぶ") { _, _ ->
+                        jsonPickerLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                    }
+                    .setNegativeButton("選ばない") { _, _ ->
+                        textProgress.text = "メタデータ(JSON)がないため、書き出しは不要です"
+                    }
+                    .show()
                 return@launch
             }
+
+            launchExport(videoUri, displayName, metadataUri, options, orientation)
+        }
+    }
+
+    private fun launchExport(
+        videoUri: Uri,
+        displayName: String,
+        metadataUri: Uri,
+        options: ExportOptions,
+        orientation: VideoExportManager.OutputOrientation
+    ) {
+        run {
 
             val intent = Intent(this@ExportActivity, ExportForegroundService::class.java).apply {
                 action = ExportForegroundService.ACTION_START_EXPORT
                 putExtra(ExportForegroundService.EXTRA_SOURCE_URI, videoUri)
                 putExtra(ExportForegroundService.EXTRA_SOURCE_DISPLAY_NAME, displayName)
-                if (metadataUri != null) {
-                    putExtra(ExportForegroundService.EXTRA_METADATA_URI, metadataUri)
-                }
+                putExtra(ExportForegroundService.EXTRA_METADATA_URI, metadataUri)
+                // 手動選択したJSON(SAF)をサービスからも読めるよう、読み取り権限を付与する
+                clipData = android.content.ClipData.newRawUri("", metadataUri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 putExtra(ExportForegroundService.EXTRA_SHOW_DATE, options.showDate)
                 putExtra(ExportForegroundService.EXTRA_SHOW_LOCATION, options.showLocation)
                 putExtra(ExportForegroundService.EXTRA_SHOW_SPEED, options.showSpeed)
@@ -192,11 +242,8 @@ class ExportActivity : AppCompatActivity() {
                 startService(intent)
             }
 
-            textProgress.text = if (metadataUri == null) {
-                "書き出しを開始しました(対応するメタデータが見つからないため、日時・位置なしで焼き込みます)。\n進捗は通知でも確認できます。この画面を閉じても処理は継続します。"
-            } else {
+            textProgress.text =
                 "書き出しを開始しました。進捗は通知でも確認できます。この画面を閉じても処理は継続します。"
-            }
             Toast.makeText(this@ExportActivity, "書き出しを開始しました", Toast.LENGTH_SHORT).show()
         }
     }

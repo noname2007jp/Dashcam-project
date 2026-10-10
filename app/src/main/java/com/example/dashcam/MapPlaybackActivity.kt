@@ -76,6 +76,21 @@ class MapPlaybackActivity : AppCompatActivity() {
         ActivityResultContracts.OpenDocument()
     ) { uri: Uri? -> if (uri != null) loadVideo(uri) }
 
+    private var pendingVideoName: String? = null
+    private val jsonPicker = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (_: Exception) {
+            }
+            showRoute(pendingVideoName, uri)
+        } else {
+            textStatus.text = "この動画にはメタデータ(JSON)がありません"
+        }
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -163,14 +178,34 @@ class MapPlaybackActivity : AppCompatActivity() {
         val name = queryDisplayName(uri)
         textStatus.text = "読み込み中: ${name ?: uri}"
         lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                val jsonUri = name?.let { findJsonUri(it) } ?: return@withContext null
-                MetadataParser.load(this@MapPlaybackActivity, jsonUri)
-            }
-            if (result == null) {
-                textStatus.text = "この動画にはメタデータ(JSON)がありません"
+            val jsonUri = withContext(Dispatchers.IO) { name?.let { findJsonUri(it) } }
+            if (jsonUri == null) {
+                // アプリを入れ直した後などは、ファイルがあってもアプリから見えないことがあるため手動選択を案内する
                 clearData()
+                textStatus.text = "対応するJSONが自動では見つかりませんでした"
+                pendingVideoName = name
+                androidx.appcompat.app.AlertDialog.Builder(this@MapPlaybackActivity)
+                    .setTitle("JSONが見つかりません")
+                    .setMessage(
+                        "「" + (name?.substringBeforeLast('.') ?: "") + ".json」を自動では探せませんでした。\n" +
+                            "(アプリを入れ直した後などは、ファイルがあってもアプリから見えないことがあります)\n\n" +
+                            "ファイルを手動で選びますか?"
+                    )
+                    .setPositiveButton("JSONを選ぶ") { _, _ ->
+                        jsonPicker.launch(arrayOf("application/json", "text/plain", "*/*"))
+                    }
+                    .setNegativeButton("選ばない", null)
+                    .show()
                 return@launch
+            }
+            showRoute(name, jsonUri)
+        }
+    }
+
+    private fun showRoute(name: String?, jsonUri: Uri) {
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                MetadataParser.load(this@MapPlaybackActivity, jsonUri)
             }
             val (samples, evs) = result
             val pts = samples.mapNotNull { s ->
@@ -179,7 +214,11 @@ class MapPlaybackActivity : AppCompatActivity() {
                 if (la != null && lo != null) Point(s, la, lo) else null
             }
             if (pts.isEmpty()) {
-                textStatus.text = "位置情報(GPS)が記録されていないため、地図に表示できません"
+                textStatus.text = if (samples.isEmpty()) {
+                    "JSONの中身が空か、読み込めませんでした"
+                } else {
+                    "位置情報(GPS)が記録されていないため、地図に表示できません"
+                }
                 clearData()
                 return@launch
             }
@@ -194,7 +233,7 @@ class MapPlaybackActivity : AppCompatActivity() {
             seek.progress = 0
             seek.isEnabled = true
             buttonPlay.isEnabled = true
-            textStatus.text = "${name}  /  位置${pts.size}点・イベント${events.size}件"
+            textStatus.text = "${name ?: ""}  /  位置${pts.size}点・イベント${events.size}件"
             sendData()
         }
     }

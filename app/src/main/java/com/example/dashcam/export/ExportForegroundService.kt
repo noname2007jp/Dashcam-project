@@ -150,8 +150,9 @@ class ExportForegroundService : Service() {
                     Log.i(TAG, "書き出し完了: ${result.displayName}")
                 }
                 is VideoExportManager.Result.NoMetadata -> {
-                    _progressText.value = "メタデータ(JSON)がないため、書き出しは不要です"
-                    updateNotification("メタデータ(JSON)がないため、書き出しは不要です", ongoing = false)
+                    val msg = "JSONはありますが、位置・速度のデータが空か読み込めなかったため、書き出しは不要です"
+                    _progressText.value = msg
+                    updateNotification(msg, ongoing = false)
                 }
                 is VideoExportManager.Result.Failure -> {
                     _progressText.value = "書き出しに失敗しました: ${result.error.message}"
