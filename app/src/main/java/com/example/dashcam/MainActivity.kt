@@ -167,6 +167,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        (getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager)
+            .registerDisplayListener(displayListener, null)
         // サービスが未起動ならプレビュー待機モードで起動し、起動中ならバインドして状態を復元する
         if (hasAllPermissions()) {
             ensureServicePreparedAndBound()
@@ -177,6 +179,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStop() {
         super.onStop()
+        (getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager)
+            .unregisterDisplayListener(displayListener)
         // Activityが表示されなくなったらプレビュー描画は止める(録画自体は継続)
         boundService?.detachPreviewSurfaceProvider()
         if (isBound) {
@@ -306,9 +310,20 @@ class MainActivity : AppCompatActivity() {
         boundService?.attachPreviewSurfaceProvider(previewView.surfaceProvider)
     }
 
+    // 回転の通知はDisplayListenerで受ける(onConfigurationChangedの時点では値が古いことがあるため)
+    private val displayListener = object : android.hardware.display.DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) {}
+        override fun onDisplayRemoved(displayId: Int) {}
+        override fun onDisplayChanged(displayId: Int) {
+            if (previewView.display?.displayId == displayId) pushDisplayRotation()
+        }
+    }
+
     @Suppress("DEPRECATION")
     private fun pushDisplayRotation() {
-        boundService?.updateDisplayRotation(windowManager.defaultDisplay.rotation)
+        val rotation = previewView.display?.rotation ?: windowManager.defaultDisplay.rotation
+        android.util.Log.i("MainActivity", "画面の向きを通知: rotation=$rotation")
+        boundService?.updateDisplayRotation(rotation)
     }
 
     // 画面の向きが変わってもActivityを作り直さず(configChanges)、プレビューの向きだけ更新する
