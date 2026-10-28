@@ -99,6 +99,21 @@ class DashcamRecorder(
     private var videoCapture: VideoCapture<Recorder>? = null
     private var preview: Preview? = null
 
+    // 画面(プレビュー)の向き。端末を回すたびに更新され、プレビューだけに適用する
+    @Volatile private var previewRotation: Int? = null
+    // 録画の向き。録画セッション開始時に固定し、途中で端末を回しても映像の向きは変えない
+    @Volatile private var recordingRotation: Int? = null
+
+    fun setPreviewTargetRotation(rotation: Int) {
+        previewRotation = rotation
+        preview?.targetRotation = rotation
+    }
+
+    fun lockRecordingRotation(rotation: Int) {
+        recordingRotation = rotation
+        videoCapture?.targetRotation = rotation
+    }
+
     // bindCamera()が非同期のため、先に渡されたプレビュー描画先を保持して、
     // バインド完了時に必ず適用する(起動直後に黒画面になる問題の対策)
     @Volatile
@@ -158,6 +173,7 @@ class DashcamRecorder(
 
         videoCapture = VideoCapture.withOutput(recorder)
         preview = Preview.Builder().build().also {
+            previewRotation?.let { rot -> it.targetRotation = rot }
             pendingSurfaceProvider?.let { sp -> it.setSurfaceProvider(sp) }
         }
 
@@ -294,6 +310,7 @@ class DashcamRecorder(
     }
 
     private fun startNewSegment() {
+        recordingRotation?.let { videoCapture?.targetRotation = it }
         val vc = videoCapture ?: run {
             Log.e(TAG, "VideoCapture が未初期化です")
             return

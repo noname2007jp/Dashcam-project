@@ -302,8 +302,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun attachPreview() {
-        // 画面は横向き固定(AndroidManifest)のため、PreviewViewが自動で正しく補正する
+        pushDisplayRotation()
         boundService?.attachPreviewSurfaceProvider(previewView.surfaceProvider)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun pushDisplayRotation() {
+        boundService?.updateDisplayRotation(windowManager.defaultDisplay.rotation)
+    }
+
+    // 画面の向きが変わってもActivityを作り直さず(configChanges)、プレビューの向きだけ更新する
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        pushDisplayRotation()
     }
 
     /** 開始前/開始後でボタンの表示を切り替える */

@@ -85,6 +85,21 @@ class DashcamForegroundService : LifecycleService() {
     @Volatile
     private var isParkingMode = false
 
+    // 設定画面でしきい値を変えたら、録画中でも即座に検知器へ反映する
+    private val prefsListener =
+        android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            when (key) {
+                SettingsManager.KEY_SHOCK_DRIVING_THRESHOLD ->
+                    shockDetector?.setDrivingThreshold(settingsManager.shockDrivingThreshold)
+                SettingsManager.KEY_SHOCK_PARKING_THRESHOLD ->
+                    shockDetector?.setParkingThreshold(settingsManager.shockParkingThreshold)
+                SettingsManager.KEY_PARKING_SPEED_KMH,
+                SettingsManager.KEY_PARKING_SUSTAIN_SEC -> applyParkingCriteria()
+                SettingsManager.KEY_TAILGATING_THRESHOLD ->
+                    tailgatingDetector?.setBrakingThreshold(settingsManager.tailgatingThreshold)
+            }
+        }
+
     // ユーザー操作による一時停止中かどうか(終了とは異なり、サービス自体は継続する)
     @Volatile
     private var isPausedByUser = false
@@ -110,6 +125,15 @@ class DashcamForegroundService : LifecycleService() {
     }
 
     private var pendingSurfaceProvider: Preview.SurfaceProvider? = null
+
+    // Activityが最後に通知した画面の向き(Surface.ROTATION_*)
+    private var lastDisplayRotation: Int? = null
+
+    /** 画面が回転したとき、Activityから呼ばれる。プレビューの向きだけを更新する。 */
+    fun updateDisplayRotation(rotation: Int) {
+        lastDisplayRotation = rotation
+        recorder?.setPreviewTargetRotation(rotation)
+    }
 
     /**
      * 録画セッション中でなければ(=プレビュー待機中なら)サービスを停止してカメラを閉じる。
@@ -160,6 +184,7 @@ class DashcamForegroundService : LifecycleService() {
         isStopping = false
         createNotificationChannel()
         voiceAlertManager = VoiceAlertManager(this)
+        settingsManager.registerChangeListener(prefsListener)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -236,6 +261,8 @@ class DashcamForegroundService : LifecycleService() {
         if (isRecordingActive) return
         isRecordingActive = true
         isPausedByUser = false
+        // 録画の向きは「開始」を押した時点の画面の向きで固定する
+        lastDisplayRotation?.let { recorder?.lockRecordingRotation(it) }
         acquireWakeLock()
         startMetadataRecorder()
         startShockDetector()
@@ -394,7 +421,13 @@ class DashcamForegroundService : LifecycleService() {
                 }
             }
         )
+        applyParkingCriteria()
         drivingStateDetector?.start()
+    }
+
+    private fun applyParkingCriteria() {
+        drivingStateDetector?.parkingThresholdKmh = settingsManager.parkingSpeedKmh.toFloat()
+        drivingStateDetector?.parkingSustainMs = settingsManager.parkingSustainSeconds * 1000L
     }
 
     private fun stopDrivingStateDetector() {
@@ -447,7 +480,11 @@ class DashcamForegroundService : LifecycleService() {
                         // 一時停止中は録画していないため保護対象もない
                         return
                     }
-                    metadataRecorder?.recordEvent(MetadataRecorder.EVENT_SHOCK, magnitudeG)
+                    val th = if (mode == ShockDetector.Mode.DRIVING)
+                        shockDetector?.drivingThresholdG else shockDetector?.parkingThresholdG
+                    metadataRecorder?.recordEvent(
+                        MetadataRecorder.EVENT_SHOCK, magnitudeG, mode.name.lowercase(), th
+                    )
                     // 駐車監視中で、まだ動体検知による録画が始まっていない場合でも
                     // 衝撃検知自体をトリガーに録画を開始する(当て逃げ等の瞬間対策)
                     if (isParkingMode) {
@@ -593,6 +630,7 @@ class DashcamForegroundService : LifecycleService() {
         )
 
         pendingSurfaceProvider?.let { recorder?.setPreviewSurfaceProvider(it) }
+        lastDisplayRotation?.let { recorder?.setPreviewTargetRotation(it) }
         recorder?.initialize()
         // 起動後30秒たっても画面が接続しなければ(起動途中でアプリが閉じられた等)自動停止する
         scheduleIdleCheck(30_000L)
@@ -631,6 +669,7 @@ class DashcamForegroundService : LifecycleService() {
         releaseWakeLock()
         voiceAlertManager?.release()
         voiceAlertManager = null
+        settingsManager.unregisterChangeListener(prefsListener)
         isRunning = false
         isRecordingActive = false
         isStopping = false

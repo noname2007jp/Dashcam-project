@@ -19,10 +19,14 @@ class SettingsManager(context: Context) {
         private const val KEY_SAVE_LOCATION_URI = "save_location_uri"
         private const val KEY_PREFERRED_ZOOM_RATIO = "preferred_zoom_ratio"
         private const val KEY_MAX_LOOP_STORAGE_GB = "max_loop_storage_gb"
-        private const val KEY_SHOCK_DRIVING_THRESHOLD = "shock_driving_threshold_g"
-        private const val KEY_SHOCK_PARKING_THRESHOLD = "shock_parking_threshold_g"
-        private const val KEY_TAILGATING_THRESHOLD = "tailgating_threshold_g"
+        const val KEY_SHOCK_DRIVING_THRESHOLD = "shock_driving_threshold_g"
+        const val KEY_SHOCK_PARKING_THRESHOLD = "shock_parking_threshold_g"
+        const val KEY_TAILGATING_THRESHOLD = "tailgating_threshold_g"
         private const val KEY_PARKING_MOTION_RECORDING = "parking_motion_recording"
+        const val KEY_PARKING_SPEED_KMH = "parking_speed_kmh"
+        const val KEY_PARKING_SUSTAIN_SEC = "parking_sustain_sec"
+        const val DEFAULT_PARKING_SPEED_KMH = 3
+        const val DEFAULT_PARKING_SUSTAIN_SEC = 10
         private const val KEY_MAP_PROVIDER = "map_provider"
         private const val KEY_GOOGLE_MAPS_KEY = "google_maps_api_key"
         const val MAP_OSM = "osm"
@@ -35,6 +39,25 @@ class SettingsManager(context: Context) {
         const val DEFAULT_SHOCK_DRIVING_THRESHOLD_G = 0.5f
         const val DEFAULT_SHOCK_PARKING_THRESHOLD_G = 0.2f
         const val DEFAULT_TAILGATING_THRESHOLD_G = 0.3f
+    }
+
+    /** 停止(駐車)とみなす速度(km/h以下)。 */
+    var parkingSpeedKmh: Int
+        get() = prefs.getInt(KEY_PARKING_SPEED_KMH, DEFAULT_PARKING_SPEED_KMH)
+        set(value) { prefs.edit().putInt(KEY_PARKING_SPEED_KMH, value).apply() }
+
+    /** 停止とみなすために、上記速度以下が連続する秒数。 */
+    var parkingSustainSeconds: Int
+        get() = prefs.getInt(KEY_PARKING_SUSTAIN_SEC, DEFAULT_PARKING_SUSTAIN_SEC)
+        set(value) { prefs.edit().putInt(KEY_PARKING_SUSTAIN_SEC, value).apply() }
+
+    /** 設定値の変更を監視する(サービスが録画中にしきい値を即時反映するため)。 */
+    fun registerChangeListener(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) {
+        prefs.registerOnSharedPreferenceChangeListener(l)
+    }
+
+    fun unregisterChangeListener(l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) {
+        prefs.unregisterOnSharedPreferenceChangeListener(l)
     }
 
     /** SAFで選択した保存先フォルダのツリーURI。未設定ならnull。 */

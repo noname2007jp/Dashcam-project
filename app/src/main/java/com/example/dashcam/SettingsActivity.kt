@@ -159,6 +159,7 @@ class SettingsActivity : AppCompatActivity() {
         setupCapacitySpinner()
         setupThresholdSliders()
         setupScreenTimeoutSpinner()
+        setupParkingCriteria()
 
         findViewById<android.widget.CheckBox>(R.id.checkParkingMotion).apply {
             isChecked = settingsManager.parkingMotionRecordingEnabled
@@ -221,6 +222,40 @@ class SettingsActivity : AppCompatActivity() {
         })
     }
 
+    private fun setupParkingCriteria() {
+        val speeds = (1..10).toList()
+        val secs = listOf(5, 10, 20, 30, 60, 120, 300)
+        bindIntSpinner(
+            findViewById(R.id.spinnerParkingSpeed), speeds,
+            { "停止とみなす速度: ${it} km/h 以下" }, settingsManager.parkingSpeedKmh
+        ) { settingsManager.parkingSpeedKmh = it }
+        bindIntSpinner(
+            findViewById(R.id.spinnerParkingSustain), secs,
+            { if (it >= 60) "継続時間: ${it / 60} 分以上" else "継続時間: ${it} 秒以上" },
+            settingsManager.parkingSustainSeconds
+        ) { settingsManager.parkingSustainSeconds = it }
+    }
+
+    private fun bindIntSpinner(
+        spinner: Spinner, values: List<Int>, label: (Int) -> String,
+        current: Int, onSelected: (Int) -> Unit
+    ) {
+        spinner.adapter = ArrayAdapter(
+            this, android.R.layout.simple_spinner_dropdown_item, values.map(label)
+        )
+        val idx = values.indexOf(current)
+        spinner.setSelection(if (idx >= 0) idx else 0)
+        spinner.post {
+            spinner.onItemSelectedListener =
+                object : android.widget.AdapterView.OnItemSelectedListener {
+                    override fun onItemSelected(
+                        p: android.widget.AdapterView<*>?, v: android.view.View?, pos: Int, id: Long
+                    ) { onSelected(values[pos]) }
+                    override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
+                }
+        }
+    }
+
     private fun setupScreenTimeoutSpinner() {
         spinnerScreenTimeout.adapter = ArrayAdapter(
             this, android.R.layout.simple_spinner_dropdown_item,
@@ -277,7 +312,7 @@ class SettingsActivity : AppCompatActivity() {
 
     /** G値 -> SeekBarのprogress値に変換(0.1刻み) */
     private fun thresholdToProgress(value: Float): Int {
-        return ((value - thresholdMin) / thresholdStep).toInt().coerceAtLeast(0)
+        return Math.round((value - thresholdMin) / thresholdStep).coerceAtLeast(0)
     }
 
     /** SeekBarのprogress値 -> G値に変換(0.1刻み) */
@@ -298,7 +333,7 @@ class SettingsActivity : AppCompatActivity() {
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {
                 Toast.makeText(
-                    this@SettingsActivity, "設定を保存しました(次回起動時から反映)", Toast.LENGTH_SHORT
+                    this@SettingsActivity, "設定を保存しました(録画中でも即時反映)", Toast.LENGTH_SHORT
                 ).show()
             }
         })
@@ -315,7 +350,7 @@ class SettingsActivity : AppCompatActivity() {
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {
                 Toast.makeText(
-                    this@SettingsActivity, "設定を保存しました(次回起動時から反映)", Toast.LENGTH_SHORT
+                    this@SettingsActivity, "設定を保存しました(録画中でも即時反映)", Toast.LENGTH_SHORT
                 ).show()
             }
         })
@@ -332,7 +367,7 @@ class SettingsActivity : AppCompatActivity() {
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {
                 Toast.makeText(
-                    this@SettingsActivity, "設定を保存しました(次回起動時から反映)", Toast.LENGTH_SHORT
+                    this@SettingsActivity, "設定を保存しました(録画中でも即時反映)", Toast.LENGTH_SHORT
                 ).show()
             }
         })

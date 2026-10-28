@@ -292,7 +292,7 @@ class MetadataRecorder(private val context: Context) {
      * 衝撃・急ブレーキなどのイベントを、現在のセグメントのメタデータへ記録する。
      * 1行のJSON({"type":"event",...})として追記する(サンプル行とは区別される)。
      */
-    fun recordEvent(eventType: String, g: Float?) {
+    fun recordEvent(eventType: String, g: Float?, mode: String? = null, thresholdG: Float? = null) {
         val file = currentSegmentFile ?: return
         try {
             val obj = JSONObject().apply {
@@ -300,6 +300,8 @@ class MetadataRecorder(private val context: Context) {
                 put("timestamp_ms", System.currentTimeMillis())
                 put("event", eventType)
                 put("g", if (g != null) g.toDouble() else JSONObject.NULL)
+                if (mode != null) put("mode", mode)
+                if (thresholdG != null) put("threshold_g", thresholdG.toDouble())
             }
             synchronized(fileLock) { file.appendText(obj.toString() + "\n") }
         } catch (e: Exception) {

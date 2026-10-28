@@ -56,6 +56,11 @@ class DrivingStateDetector(
         private const val SPEED_HISTORY_SIZE = 10
     }
 
+    /** 停止とみなす速度(km/h以下)。設定から変更可能。 */
+    @Volatile var parkingThresholdKmh: Float = PARKING_THRESHOLD_KMH
+    /** 停止とみなすための連続時間(ミリ秒)。設定から変更可能。 */
+    @Volatile var parkingSustainMs: Long = SUSTAIN_DURATION_MS
+
     private val fusedLocationClient: FusedLocationProviderClient =
         LocationServices.getFusedLocationProviderClient(context)
 
@@ -121,13 +126,16 @@ class DrivingStateDetector(
         // 直近の速度履歴の平均値を判定に使う(単発の急な値によるブレを抑える)
         val avgSpeedKmh = speedHistoryKmh.average().toFloat()
 
-        evaluateState(avgSpeedKmh)
+        evaluateState(avgSpeedKmh, speedKmh)
     }
 
-    private fun evaluateState(avgSpeedKmh: Float) {
+    private fun evaluateState(avgSpeedKmh: Float, latestSpeedKmh: Float) {
+        // 走行側の閾値は、停止速度設定より必ず高く保つ(ヒステリシス確保)
+        val drivingThreshold = maxOf(DRIVING_THRESHOLD_KMH, parkingThresholdKmh + 3f)
         val suggestedState = when {
-            avgSpeedKmh >= DRIVING_THRESHOLD_KMH -> State.DRIVING
-            avgSpeedKmh <= PARKING_THRESHOLD_KMH -> State.PARKING
+            avgSpeedKmh >= drivingThreshold -> State.DRIVING
+            // 停止は厳密判定: 毎回のGPS速度が閾値以下であること(超えたら計測をやり直す)
+            latestSpeedKmh <= parkingThresholdKmh -> State.PARKING
             else -> currentState // 閾値の中間帯では現状維持
         }
 
@@ -149,7 +157,8 @@ class DrivingStateDetector(
         }
 
         // 同じ候補状態が SUSTAIN_DURATION_MS 続いたら本採用
-        if (now - candidateSinceMs >= SUSTAIN_DURATION_MS) {
+        val needMs = if (suggestedState == State.PARKING) parkingSustainMs else SUSTAIN_DURATION_MS
+        if (now - candidateSinceMs >= needMs) {
             transitionTo(suggestedState, avgSpeedKmh)
         }
     }
