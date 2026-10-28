@@ -118,6 +118,9 @@ class MainActivity : AppCompatActivity() {
         toolbar = findViewById(R.id.toolbar)
         setSupportActionBar(toolbar)
         previewView = findViewById(R.id.previewView)
+        // SurfaceViewではなくTextureViewで描画する。回転・拡大の補正をViewの行列で行うため、
+        // 端末を回したときにプレビューの向きが確実に追従する
+        previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         blackoutOverlay = findViewById(R.id.blackoutOverlay)
 
         // 疑似消灯中にタップされたら復帰する

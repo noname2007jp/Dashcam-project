@@ -105,8 +105,19 @@ class DashcamRecorder(
     @Volatile private var recordingRotation: Int? = null
 
     fun setPreviewTargetRotation(rotation: Int) {
+        val changed = previewRotation != rotation
         previewRotation = rotation
-        preview?.targetRotation = rotation
+        val p = preview ?: return
+        p.targetRotation = rotation
+        if (changed) {
+            // 回転後に描画先をつなぎ直して、PreviewViewに向きを再計算させる
+            // (画面を離れて戻ったときに正常になる動作と同じ)
+            val sp = pendingSurfaceProvider
+            if (sp != null) {
+                p.setSurfaceProvider(null)
+                p.setSurfaceProvider(sp)
+            }
+        }
     }
 
     fun lockRecordingRotation(rotation: Int) {
