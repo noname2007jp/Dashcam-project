@@ -5,6 +5,8 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import kotlin.math.sqrt
 
@@ -57,6 +59,12 @@ class TailgatingDetector(
 
         // 一度判定を通知したら、この時間は再判定しない(通知の連発防止)
         private const val TRIGGER_COOLDOWN_MS = 30_000L
+
+        // 加速度のピークを「急ブレーキ」と数えるには、GPS速度が実際に下がっていること
+        // (段差や車体の振動による誤検知を除くため)。GPSの更新遅れを見込み、ピークの少し後で確認する。
+        const val MIN_SPEED_DROP_KMH = 5f
+        const val SPEED_DROP_WINDOW_MS = 8_000L
+        private const val CONFIRM_DELAY_MS = 3_500L
     }
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
@@ -64,6 +72,12 @@ class TailgatingDetector(
         sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
 
     private var brakingThresholdG: Float = DEFAULT_BRAKING_THRESHOLD_G
+
+    /** 直近のGPS速度低下量(km/h)を返す関数。未設定の場合は加速度だけで判定する。 */
+    @Volatile
+    var speedDropProvider: ((windowMs: Long) -> Float)? = null
+
+    private val handler = Handler(Looper.getMainLooper())
 
     // 直近の急ブレーキ発生時刻の履歴(ウィンドウ内のものだけを保持)
     private val eventTimestamps = ArrayDeque<Long>()
@@ -81,6 +95,7 @@ class TailgatingDetector(
         isActive = active
         if (!active) {
             eventTimestamps.clear()
+            handler.removeCallbacksAndMessages(null)
         }
         Log.i(TAG, "アクティブ状態を変更: $active")
     }
@@ -112,6 +127,7 @@ class TailgatingDetector(
         sensorManager.unregisterListener(this)
         isListening = false
         eventTimestamps.clear()
+        handler.removeCallbacksAndMessages(null)
         Log.i(TAG, "急ブレーキ連続検知を停止しました")
     }
 
@@ -132,9 +148,31 @@ class TailgatingDetector(
         if (now - lastEventTimeMs < EVENT_COOLDOWN_MS) return
         lastEventTimeMs = now
 
-        eventTimestamps.addLast(now)
+        val provider = speedDropProvider
+        if (provider == null) {
+            registerBrakingEvent(now, magnitudeG)
+        } else {
+            // GPS速度の更新は遅れるため、少し待ってから速度が実際に下がったかを確認する
+            handler.postDelayed({
+                if (!isActive || !isListening) return@postDelayed
+                val drop = provider(SPEED_DROP_WINDOW_MS)
+                if (drop >= MIN_SPEED_DROP_KMH) {
+                    registerBrakingEvent(now, magnitudeG)
+                } else {
+                    Log.i(
+                        TAG,
+                        "加速度ピーク(${"%.2f".format(magnitudeG)}G)を無視: " +
+                            "速度低下 ${"%.1f".format(drop)}km/h < ${MIN_SPEED_DROP_KMH}km/h"
+                    )
+                }
+            }, CONFIRM_DELAY_MS)
+        }
+    }
+
+    private fun registerBrakingEvent(eventTimeMs: Long, magnitudeG: Float) {
+        eventTimestamps.addLast(eventTimeMs)
         // ウィンドウ外の古い記録を削除
-        while (eventTimestamps.isNotEmpty() && now - eventTimestamps.first() > WINDOW_MS) {
+        while (eventTimestamps.isNotEmpty() && eventTimeMs - eventTimestamps.first() > WINDOW_MS) {
             eventTimestamps.removeFirst()
         }
 
@@ -144,6 +182,7 @@ class TailgatingDetector(
                 "(直近${WINDOW_MS / 1000}秒間で${eventTimestamps.size}回)"
         )
 
+        val now = System.currentTimeMillis()
         if (eventTimestamps.size >= REQUIRED_EVENT_COUNT &&
             now - lastTriggerTimeMs >= TRIGGER_COOLDOWN_MS
         ) {

@@ -133,6 +133,9 @@ class MetadataRecorder(private val context: Context) {
      * 新しいセグメントの記録を開始する(DashcamRecorder.Listener.onSegmentStartedから呼ぶ)。
      * 対応する一時ファイルを新規作成(空の状態)する。
      */
+    // 録画していない間(駐車待機中など)に起きたイベントを、次のセグメント開始時に書き込む
+    private val pendingEventLines = ArrayList<String>()
+
     fun startSegment(videoDisplayName: String) {
         val baseName = videoDisplayName.substringBeforeLast('.')
         val file = File(tmpDir, "$baseName.jsonl")
@@ -140,6 +143,12 @@ class MetadataRecorder(private val context: Context) {
             file.writeText("") // 新規作成/既存なら空にする
             currentSegmentFile = file
             currentSegmentName = videoDisplayName
+            synchronized(fileLock) {
+                if (pendingEventLines.isNotEmpty()) {
+                    file.appendText(pendingEventLines.joinToString("\n", postfix = "\n"))
+                    pendingEventLines.clear()
+                }
+            }
         } catch (e: Exception) {
             Log.e(TAG, "一時ファイルの作成に失敗しました: $baseName", e)
             currentSegmentFile = null
@@ -293,7 +302,6 @@ class MetadataRecorder(private val context: Context) {
      * 1行のJSON({"type":"event",...})として追記する(サンプル行とは区別される)。
      */
     fun recordEvent(eventType: String, g: Float?, mode: String? = null, thresholdG: Float? = null) {
-        val file = currentSegmentFile ?: return
         try {
             val obj = JSONObject().apply {
                 put("type", "event")
@@ -303,7 +311,16 @@ class MetadataRecorder(private val context: Context) {
                 if (mode != null) put("mode", mode)
                 if (thresholdG != null) put("threshold_g", thresholdG.toDouble())
             }
-            synchronized(fileLock) { file.appendText(obj.toString() + "\n") }
+            val line = obj.toString()
+            synchronized(fileLock) {
+                val file = currentSegmentFile
+                if (file != null) {
+                    file.appendText(line + "\n")
+                } else {
+                    // 録画していない間のイベントは保持し、次のセグメント開始時に書き込む
+                    if (pendingEventLines.size < 20) pendingEventLines.add(line)
+                }
+            }
         } catch (e: Exception) {
             Log.e(TAG, "イベントの記録に失敗しました", e)
         }

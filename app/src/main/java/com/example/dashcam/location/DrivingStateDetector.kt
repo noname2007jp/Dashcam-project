@@ -69,6 +69,18 @@ class DrivingStateDetector(
     private var candidateSinceMs: Long = 0L
 
     private val speedHistoryKmh = LinkedList<Float>()
+
+    // 時刻つきの速度履歴(急ブレーキの確認用。直近30秒分)
+    private val timedSpeeds = LinkedList<Pair<Long, Float>>()
+
+    /** 直近 windowMs 以内の最大速度と最新速度の差(km/h)。下がっていなければ0。 */
+    fun recentSpeedDropKmh(windowMs: Long): Float {
+        val now = System.currentTimeMillis()
+        val recent = timedSpeeds.filter { now - it.first <= windowMs }
+        if (recent.isEmpty()) return 0f
+        val latest = recent.last().second
+        return (recent.maxOf { it.second } - latest).coerceAtLeast(0f)
+    }
     private var isTracking = false
 
     private val locationCallback = object : LocationCallback() {
@@ -105,6 +117,7 @@ class DrivingStateDetector(
         fusedLocationClient.removeLocationUpdates(locationCallback)
         isTracking = false
         speedHistoryKmh.clear()
+        timedSpeeds.clear()
         Log.i(TAG, "走行/駐車判定を停止しました")
     }
 
@@ -117,6 +130,11 @@ class DrivingStateDetector(
         } else {
             0f
         }
+
+        timedSpeeds.addLast(System.currentTimeMillis() to speedKmh)
+        while (timedSpeeds.isNotEmpty() &&
+            System.currentTimeMillis() - timedSpeeds.first.first > 30_000L
+        ) timedSpeeds.removeFirst()
 
         speedHistoryKmh.addLast(speedKmh)
         if (speedHistoryKmh.size > SPEED_HISTORY_SIZE) {

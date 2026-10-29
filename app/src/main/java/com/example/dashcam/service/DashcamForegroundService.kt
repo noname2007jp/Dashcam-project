@@ -129,6 +129,13 @@ class DashcamForegroundService : LifecycleService() {
     // Activityが最後に通知した画面の向き(Surface.ROTATION_*)
     private var lastDisplayRotation: Int? = null
 
+    // ユーザーが画面を最後に操作した時刻。操作直後の揺れを駐車中の衝撃と誤検知しないために使う
+    @Volatile private var lastUserInteractionMs = 0L
+
+    fun notifyUserInteraction() {
+        lastUserInteractionMs = System.currentTimeMillis()
+    }
+
     /** 画面が回転したとき、Activityから呼ばれる。プレビューの向きだけを更新する。 */
     fun updateDisplayRotation(rotation: Int) {
         lastDisplayRotation = rotation
@@ -455,6 +462,10 @@ class DashcamForegroundService : LifecycleService() {
             }
         )
         tailgatingDetector?.setBrakingThreshold(settingsManager.tailgatingThreshold)
+        // 加速度のピークだけでなく、GPS速度が実際に下がったときだけ急ブレーキと数える
+        tailgatingDetector?.speedDropProvider = { windowMs ->
+            drivingStateDetector?.recentSpeedDropKmh(windowMs) ?: 0f
+        }
         tailgatingDetector?.start()
         // 開始直後は走行状態が未確定なため、DrivingStateDetectorの判定が
         // 出るまでは非アクティブ。DRIVING判定時に setActive(true) される。
@@ -478,6 +489,13 @@ class DashcamForegroundService : LifecycleService() {
                     Log.i(TAG, "衝撃検知イベント: ${"%.2f".format(magnitudeG)}G (mode=$mode)")
                     if (isPausedByUser) {
                         // 一時停止中は録画していないため保護対象もない
+                        return
+                    }
+                    if (mode == ShockDetector.Mode.PARKING &&
+                        System.currentTimeMillis() - lastUserInteractionMs < 10_000L
+                    ) {
+                        // 画面を操作した直後の揺れは、駐車中の衝撃として扱わない
+                        Log.i(TAG, "操作直後の揺れのため駐車中の衝撃を無視: ${"%.2f".format(magnitudeG)}G")
                         return
                     }
                     val th = if (mode == ShockDetector.Mode.DRIVING)

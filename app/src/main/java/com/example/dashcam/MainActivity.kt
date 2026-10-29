@@ -202,6 +202,7 @@ class MainActivity : AppCompatActivity() {
      */
     override fun onUserInteraction() {
         super.onUserInteraction()
+        boundService?.notifyUserInteraction()
         if (isPseudoOff) {
             wakeFromPseudoOff()
         }
