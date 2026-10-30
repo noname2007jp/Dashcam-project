@@ -142,6 +142,7 @@ class DashcamRecorder(
     // 直前に完了したセグメント(衝撃検知が発生した瞬間の「1つ前」を保護するために保持)
     private var lastCompletedSegmentUri: Uri? = null
     private var lastCompletedSegmentDisplayName: String? = null
+    private var lastCompletedAtMs: Long = 0L
 
     // 現在録画中のセグメントが保護対象としてマークされているかどうか
     @Volatile
@@ -266,7 +267,8 @@ class DashcamRecorder(
             pendingProtectionForCurrentSegment = true
             Log.i(TAG, "現在のセグメントを保護対象としてマーク: $currentSegmentDisplayName")
 
-            val previousUri = lastCompletedSegmentUri
+            // 終了から60秒を超えた古い動画は、今回のイベントとは無関係なので保護しない
+            val previousUri = if (System.currentTimeMillis() - lastCompletedAtMs <= 60_000L) lastCompletedSegmentUri else null
             val previousName = lastCompletedSegmentDisplayName
             if (previousUri != null) {
                 cameraExecutor.execute {
@@ -443,6 +445,7 @@ class DashcamRecorder(
                         } else {
                             Log.i(TAG, "セグメント保存完了: $displayName (${duration}ms)")
                             lastCompletedSegmentUri = uri
+                            lastCompletedAtMs = System.currentTimeMillis()
                             lastCompletedSegmentDisplayName = displayName
                             listener.onSegmentSaved(uri, displayName, duration)
                         }

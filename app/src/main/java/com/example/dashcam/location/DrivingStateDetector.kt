@@ -38,6 +38,8 @@ class DrivingStateDetector(
 
     companion object {
         private const val TAG = "DrivingStateDetector"
+        private const val QUICK_DRIVING_KMH = 10.0f
+        private const val DRIVING_SUSTAIN_MS = 3_000L
 
         // 走行中とみなす速度(km/h)。これを超えたら走行中に遷移
         private const val DRIVING_THRESHOLD_KMH = 8.0f
@@ -149,9 +151,10 @@ class DrivingStateDetector(
 
     private fun evaluateState(avgSpeedKmh: Float, latestSpeedKmh: Float) {
         // 走行側の閾値は、停止速度設定より必ず高く保つ(ヒステリシス確保)
-        val drivingThreshold = maxOf(DRIVING_THRESHOLD_KMH, parkingThresholdKmh + 3f)
+        val drivingThreshold = maxOf(QUICK_DRIVING_KMH, parkingThresholdKmh + 3f)
         val suggestedState = when {
-            avgSpeedKmh >= drivingThreshold -> State.DRIVING
+            // 走行は現在速度で素早く判定(発進直後に駐車モードが残らないように)
+            latestSpeedKmh >= drivingThreshold -> State.DRIVING
             // 停止は厳密判定: 毎回のGPS速度が閾値以下であること(超えたら計測をやり直す)
             latestSpeedKmh <= parkingThresholdKmh -> State.PARKING
             else -> currentState // 閾値の中間帯では現状維持
@@ -175,7 +178,7 @@ class DrivingStateDetector(
         }
 
         // 同じ候補状態が SUSTAIN_DURATION_MS 続いたら本採用
-        val needMs = if (suggestedState == State.PARKING) parkingSustainMs else SUSTAIN_DURATION_MS
+        val needMs = if (suggestedState == State.PARKING) parkingSustainMs else DRIVING_SUSTAIN_MS
         if (now - candidateSinceMs >= needMs) {
             transitionTo(suggestedState, avgSpeedKmh)
         }
