@@ -52,7 +52,7 @@ class DrivingStateDetector(
         private const val SUSTAIN_DURATION_MS = 10_000L
 
         // GPS位置情報の取得間隔
-        private const val LOCATION_UPDATE_INTERVAL_MS = 3_000L
+        private const val LOCATION_UPDATE_INTERVAL_MS = 1_000L
 
         // 状態判定に使う速度履歴の保持件数
         private const val SPEED_HISTORY_SIZE = 10
@@ -60,6 +60,9 @@ class DrivingStateDetector(
 
     /** 停止とみなす速度(km/h以下)。設定から変更可能。 */
     @Volatile var parkingThresholdKmh: Float = PARKING_THRESHOLD_KMH
+    /** 最新のGPS速度(km/h)。衝撃判定が「いま動いているか」を確認するために使う。 */
+    @Volatile var latestSpeedKmh: Float = 0f
+        private set
     /** 停止とみなすための連続時間(ミリ秒)。設定から変更可能。 */
     @Volatile var parkingSustainMs: Long = SUSTAIN_DURATION_MS
 
@@ -133,6 +136,7 @@ class DrivingStateDetector(
             0f
         }
 
+        latestSpeedKmh = speedKmh
         timedSpeeds.addLast(System.currentTimeMillis() to speedKmh)
         while (timedSpeeds.isNotEmpty() &&
             System.currentTimeMillis() - timedSpeeds.first.first > 30_000L
