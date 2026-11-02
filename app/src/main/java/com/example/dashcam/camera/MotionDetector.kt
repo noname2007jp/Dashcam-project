@@ -3,7 +3,9 @@ package com.example.dashcam.camera
 import android.util.Log
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import java.util.ArrayDeque
 import kotlin.math.abs
+import kotlin.math.hypot
 
 /**
  * ImageAnalysisのフレームから動体検知を行うアナライザ(駐車監視モード用)。
@@ -46,6 +48,41 @@ class MotionDetector(
         private const val SAMPLING_STEP = 4
     }
 
+    // 映像の揺れ(フレーム間の画面全体のズレ[px/フレーム])の履歴。衝撃判定の補助に使う
+    private val shakeHistory = ArrayDeque<Pair<Long, Float>>()
+    private val shakeLock = Any()
+
+    val isMotionActiveNow: Boolean get() = isMotionActive
+
+    /** [fromMs, toMs] の間の最大のズレ。フレームが無ければ -1。 */
+    fun peakShakePx(fromMs: Long, toMs: Long): Float {
+        synchronized(shakeLock) {
+            var peak = -1f
+            for ((t, v) in shakeHistory) if (t in fromMs..toMs && v > peak) peak = v
+            return peak
+        }
+    }
+
+    /** [fromMs, toMs] の平均のズレ(平常時の揺れの目安)。フレームが無ければ -1。 */
+    fun meanShakePx(fromMs: Long, toMs: Long): Float {
+        synchronized(shakeLock) {
+            var sum = 0f; var n = 0
+            for ((t, v) in shakeHistory) if (t in fromMs..toMs) { sum += v; n++ }
+            return if (n > 0) sum / n else -1f
+        }
+    }
+
+    private fun recordShake(prev: ByteArray, cur: ByteArray, w: Int, h: Int, stride: Int) {
+        val (dx, dy) = ShakeEstimator.estimate(prev, cur, w, h, stride)
+        val now = System.currentTimeMillis()
+        synchronized(shakeLock) {
+            shakeHistory.addLast(now to hypot(dx.toFloat(), dy.toFloat()))
+            while (shakeHistory.isNotEmpty() && now - shakeHistory.first.first > 6_000L) {
+                shakeHistory.removeFirst()
+            }
+        }
+    }
+
     private var previousFrame: ByteArray? = null
     private var frameWidth = 0
     private var frameHeight = 0
@@ -69,6 +106,7 @@ class MotionDetector(
             if (prev != null && prev.size == currentFrame.size &&
                 width == frameWidth && height == frameHeight
             ) {
+                recordShake(prev, currentFrame, width, height, yPlane.rowStride)
                 val changedRatio = computeChangedRatio(prev, currentFrame)
                 handleFrameResult(changedRatio)
             }

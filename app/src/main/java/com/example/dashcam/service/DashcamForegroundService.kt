@@ -43,6 +43,15 @@ class DashcamForegroundService : LifecycleService() {
         private const val NOTIFICATION_CHANNEL_ID = "dashcam_recording_channel"
         private const val NOTIFICATION_ID = 1001
 
+        // 映像による衝撃判定の補助
+        private const val SHAKE_WAIT_MS = 700L
+        // 駐車中でこのG以上の衝撃は、映像に関係なく採用する
+        private const val PARKING_STRONG_SHOCK_G = 0.6f
+        // 弱い駐車中の衝撃を採用するのに必要な映像の揺れ(px/フレーム、320x240換算)
+        private const val PARKING_MIN_SHAKE_PX = 3f
+        // 衝撃で始まった駐車中の録画の長さ
+        private const val PARKING_SHOCK_RECORD_MS = 30_000L
+
         const val ACTION_START = "com.example.dashcam.action.START"
         const val ACTION_STOP = "com.example.dashcam.action.STOP"
         const val ACTION_PAUSE = "com.example.dashcam.action.PAUSE"
@@ -476,6 +485,58 @@ class DashcamForegroundService : LifecycleService() {
         tailgatingDetector = null
     }
 
+    private val shockHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    /**
+     * 衝撃を最終判定する。映像の揺れは「補助」で、強い衝撃は無条件に採用する。
+     * 弱い駐車中の衝撃(例: 発進時の加速、風、ドアの開閉)は、カメラ映像が実際に
+     * 揺れていない場合に限り無視する。
+     */
+    private fun evaluateShock(g: Float, mode: ShockDetector.Mode, t: Long, weakParking: Boolean) {
+        if (isPausedByUser || shockDetector == null) return
+        val peak = motionDetector?.peakShakePx(t - 500L, t + SHAKE_WAIT_MS) ?: -1f
+        val base = motionDetector?.meanShakePx(t - 3_000L, t - 700L) ?: -1f
+        if (weakParking && peak >= 0f) {
+            val need = maxOf(PARKING_MIN_SHAKE_PX, if (base >= 0f) base * 3f else 0f)
+            if (peak < need) {
+                Log.i(
+                    TAG,
+                    "映像に揺れがないため駐車中の弱い衝撃を無視: ${"%.2f".format(g)}G " +
+                        "(揺れ ${"%.1f".format(peak)}px < ${"%.1f".format(need)}px)"
+                )
+                return
+            }
+        }
+        val th = if (mode == ShockDetector.Mode.DRIVING)
+            shockDetector?.drivingThresholdG else shockDetector?.parkingThresholdG
+        metadataRecorder?.recordEvent(
+            MetadataRecorder.EVENT_SHOCK, g, mode.name.lowercase(), th,
+            timestampMs = t, shakePx = peak
+        )
+        // 駐車監視中は衝撃自体をトリガーに録画を開始する(当て逃げ等の瞬間対策)
+        if (isParkingMode) {
+            recorder?.startLoopRecording()
+            scheduleParkingShockStop()
+        }
+        // 現在録画中のセグメントを保護対象としてマーク
+        recorder?.markCurrentSegmentAsProtected()
+        updateNotification("衝撃を検知しました(${"%.1f".format(g)}G)")
+    }
+
+    // 衝撃で始まった駐車中の録画は、動体検知が働かなければ止まらないため、一定時間で止める
+    private val parkingShockStop = Runnable {
+        if (isParkingMode && !isPausedByUser && motionDetector?.isMotionActiveNow != true) {
+            Log.i(TAG, "衝撃で始まった駐車中の録画を終了します")
+            recorder?.stopRecording()
+            updateNotification("駐車監視中(待機)")
+        }
+    }
+
+    private fun scheduleParkingShockStop() {
+        shockHandler.removeCallbacks(parkingShockStop)
+        shockHandler.postDelayed(parkingShockStop, PARKING_SHOCK_RECORD_MS)
+    }
+
     private fun startShockDetector() {
         if (shockDetector != null) {
             Log.w(TAG, "既にShockDetectorが起動しています")
@@ -498,19 +559,17 @@ class DashcamForegroundService : LifecycleService() {
                         Log.i(TAG, "操作直後の揺れのため駐車中の衝撃を無視: ${"%.2f".format(magnitudeG)}G")
                         return
                     }
-                    val th = if (mode == ShockDetector.Mode.DRIVING)
-                        shockDetector?.drivingThresholdG else shockDetector?.parkingThresholdG
-                    metadataRecorder?.recordEvent(
-                        MetadataRecorder.EVENT_SHOCK, magnitudeG, mode.name.lowercase(), th
-                    )
-                    // 駐車監視中で、まだ動体検知による録画が始まっていない場合でも
-                    // 衝撃検知自体をトリガーに録画を開始する(当て逃げ等の瞬間対策)
-                    if (isParkingMode) {
+                    val t = System.currentTimeMillis()
+                    val weakParking = mode == ShockDetector.Mode.PARKING &&
+                        magnitudeG < PARKING_STRONG_SHOCK_G
+                    // 強い衝撃の駐車中は、録画の取りこぼしを避けるため先に録画を始める
+                    if (mode == ShockDetector.Mode.PARKING && !weakParking && isParkingMode) {
                         recorder?.startLoopRecording()
                     }
-                    // 現在録画中のセグメントを保護対象としてマーク
-                    recorder?.markCurrentSegmentAsProtected()
-                    updateNotification("衝撃を検知しました(${"%.1f".format(magnitudeG)}G)")
+                    // 映像の揺れは衝撃の直後まで見る必要があるため、少し待ってから判定する
+                    shockHandler.postDelayed(
+                        { evaluateShock(magnitudeG, mode, t, weakParking) }, SHAKE_WAIT_MS
+                    )
                 }
             }
         ).apply {
@@ -521,6 +580,7 @@ class DashcamForegroundService : LifecycleService() {
     }
 
     private fun stopShockDetector() {
+        shockHandler.removeCallbacksAndMessages(null)
         shockDetector?.stop()
         shockDetector = null
     }

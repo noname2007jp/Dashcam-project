@@ -301,15 +301,20 @@ class MetadataRecorder(private val context: Context) {
      * 衝撃・急ブレーキなどのイベントを、現在のセグメントのメタデータへ記録する。
      * 1行のJSON({"type":"event",...})として追記する(サンプル行とは区別される)。
      */
-    fun recordEvent(eventType: String, g: Float?, mode: String? = null, thresholdG: Float? = null) {
+    fun recordEvent(
+        eventType: String, g: Float?, mode: String? = null, thresholdG: Float? = null,
+        timestampMs: Long? = null, shakePx: Float? = null
+    ) {
         try {
             val obj = JSONObject().apply {
                 put("type", "event")
-                put("timestamp_ms", System.currentTimeMillis())
+                put("timestamp_ms", timestampMs ?: System.currentTimeMillis())
                 put("event", eventType)
                 put("g", if (g != null) g.toDouble() else JSONObject.NULL)
                 if (mode != null) put("mode", mode)
                 if (thresholdG != null) put("threshold_g", thresholdG.toDouble())
+                // 映像の揺れ(px/フレーム)。-1は映像なし。判定の補助と、しきい値調整の確認用
+                if (shakePx != null) put("shake_px", shakePx.toDouble())
             }
             val line = obj.toString()
             synchronized(fileLock) {
