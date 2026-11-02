@@ -29,7 +29,7 @@ object ShakeEstimator {
             rows++
             y += 2
         }
-        for (x in 0 until width) { pCol[x] /= rows; cCol[x] /= rows }
+        for (x in 0 until width) { pCol[x] = pCol[x] / rows; cCol[x] = cCol[x] / rows }
         val cols = (width + 1) / 2
         for (yy in 0 until height) {
             val base = yy * stride
